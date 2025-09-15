@@ -41,7 +41,9 @@ def get_tokenizer_from_vocab_merges_path(
     merges_path: str | os.PathLike,
     special_tokens: list[str] | None = None,
 ):
+    # 反转 gpt2_bytes_to_unicode得到 gpt2_byte_decoder（Unicode 字符到字节的映射），用于后续将词表中的 Unicode 字符串还原为原始字节。
     gpt2_byte_decoder = {v: k for k, v in gpt2_bytes_to_unicode().items()}
+    # vocab_path指向 GPT-2 格式的词表文件（如 vocab.json），内容为 JSON 对象，键是子词字符串（如 "hello"），值是对应的索引（如 123）
     with open(vocab_path) as vocab_f:
         gpt2_vocab = json.load(vocab_f)
     gpt2_bpe_merges = []
@@ -53,6 +55,7 @@ def get_tokenizer_from_vocab_merges_path(
     # The GPT-2 tokenizer uses a remapped unicode encoding for bytes. Let's
     # just return the original bytes, so we don't force students to use
     # any particular encoding scheme.
+    # 最终 vocab的键是原子词索引，值是原始字节（如 123: b'low'）
     vocab = {
         gpt2_vocab_index: bytes([gpt2_byte_decoder[token] for token in gpt2_vocab_item])
         for gpt2_vocab_item, gpt2_vocab_index in gpt2_vocab.items()
@@ -64,6 +67,7 @@ def get_tokenizer_from_vocab_merges_path(
             if byte_encoded_special_token not in set(vocab.values()):
                 vocab[len(vocab)] = byte_encoded_special_token
 
+    # 将合并规则中的 Unicode 子词对还原为原始字节对，与词表的字节级数据对齐
     merges = [
         (
             bytes([gpt2_byte_decoder[token] for token in merge_token_1]),

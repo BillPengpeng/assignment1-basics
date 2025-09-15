@@ -1,9 +1,10 @@
 import json
 import time
 
-from .adapters import run_train_bpe
-from .common import FIXTURES_PATH, gpt2_bytes_to_unicode
-
+from adapters import run_train_bpe
+from common import FIXTURES_PATH, gpt2_bytes_to_unicode
+# from .adapters import run_train_bpe
+# from .common import FIXTURES_PATH, gpt2_bytes_to_unicode
 
 def test_train_bpe_speed():
     """
@@ -15,12 +16,13 @@ def test_train_bpe_speed():
     """
     input_path = FIXTURES_PATH / "corpus.en"
     start_time = time.time()
-    _, _ = run_train_bpe(
+    vocab, merges = run_train_bpe(
         input_path=input_path,
         vocab_size=500,
         special_tokens=["<|endoftext|>"],
     )
     end_time = time.time()
+    print(end_time - start_time)
     assert end_time - start_time < 1.5
 
 
@@ -47,6 +49,8 @@ def test_train_bpe():
             )
             for merge_token_1, merge_token_2 in gpt2_reference_merges
         ]
+    # print(len(merges), len(reference_merges))
+    # import pdb;pdb.set_trace()
     assert merges == reference_merges
 
     # Compare the vocab to the expected output vocab
@@ -58,6 +62,8 @@ def test_train_bpe():
         }
     # Rather than checking that the vocabs exactly match (since they could
     # have been constructed differently, we'll make sure that the vocab keys and values match)
+    # print(len(vocab.keys()), len(reference_merges))
+    # import pdb;pdb.set_trace()
     assert set(vocab.keys()) == set(reference_vocab.keys())
     assert set(vocab.values()) == set(reference_vocab.values())
 
@@ -86,3 +92,7 @@ def test_train_bpe_special_tokens(snapshot):
             "merges": merges,
         },
     )
+
+if __name__ == "__main__":
+    test_train_bpe_speed()
+    test_train_bpe()

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import os
+# 20250914 add regex, defaultdict
+import regex
+from collections import defaultdict
 from collections.abc import Iterable
 from typing import IO, Any, BinaryIO
 
@@ -538,6 +541,21 @@ def run_load_checkpoint(
     """
     raise NotImplementedError
 
+GPT2_TOKENIZER_REGEX = \
+    r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+
+def merge(indices: list[int], pair: tuple[int, int], new_index: int) -> list[int]:  # @inspect indices, @inspect pair, @inspect new_index
+    """Return `indices`, but with all instances of `pair` replaced with `new_index`."""
+    new_indices = []  # @inspect new_indices
+    i = 0  # @inspect i
+    while i < len(indices):
+        if i + 1 < len(indices) and indices[i] == pair[0] and indices[i + 1] == pair[1]:
+            new_indices.append(new_index)
+            i += 2
+        else:
+            new_indices.append(indices[i])
+            i += 1
+    return new_indices
 
 def get_tokenizer(
     vocab: dict[int, bytes],
@@ -589,4 +607,85 @@ def run_train_bpe(
                 representing that <token1> was merged with <token2>.
                 Merges are ordered by order of creation.
     """
-    raise NotImplementedError
+
+    vocab: dict[int, bytes] = {x: bytes([x]) for x in range(256)}  # index -> bytes
+    merges: list[tuple[bytes, bytes]] = []
+    
+    # 合并special_tokens
+    special_token_vocab_list = list()
+    for special_token in special_tokens:
+        # 编码为 UTF-8 字节（关键步骤）
+        idx = len(vocab.keys())
+        vocab[idx] = special_token.encode("utf-8")
+        special_token_vocab_list.append(vocab[idx])
+    # 疑问?
+    # for x in range(256):
+    #     idx = len(vocab.keys())
+    #     vocab[idx] = bytes([x])
+
+
+    # 读取输入文件
+    with open(input_path, "r") as f:
+        content = f.read()
+    pattern = GPT2_TOKENIZER_REGEX  # @inspect pattern
+    segments = regex.findall(pattern, content)  # @inspect segments
+    # special_pattern = "|".join(regex.escape(token) for token in special_tokens)
+    # import pdb;pdb.set_trace()
+
+    # 循环合并
+    # map(int, bytes)会将 bytes对象中的每个字节值（如 0x61）转换为对应的整数（如 97），并生成一个包含这些整数的迭代器
+    # indices = list(map(int, "ab".encode("utf-8")))→ [97, 98]。
+    # indices = list(map(int, "你好".encode("utf-8")))→ [228, 189, 160, 229, 165, 189]。
+    # indices = list(map(int, content.encode("utf-8"))) 
+    # text("The GPT-2 paper used word-based tokenization to break up the text into inital segments and run the original BPE algorithm on each segment.")
+    indices_list = list()
+    for segment in segments:
+        indices_list.append(list(map(int, segment.encode("utf-8")))) 
+    indices_list_length = len(indices_list)
+    cur_vocab_size = len(vocab.keys())
+    while cur_vocab_size < vocab_size:
+        # 对于普通dict，如果访问不存在的键，会引发KeyError异常，而defaultdict则会返回默认值，并且自动将该键添加到字典中，值为默认值的结果。
+        # counts = dict()
+        counts = defaultdict(int)
+        max_count = 0
+        max_pair = None
+        max_sub_str = None
+        for indices in indices_list:
+            for index1, index2 in zip(indices, indices[1:]):  # For each adjacent pair
+                cur_byte_pair = index1 + index2
+                if cur_byte_pair in special_token_vocab_list:
+                    continue
+                counts[(index1, index2)] += 1  # @inspect counts
+                cur_sub_str = vocab[index1] + vocab[index2]
+                if (counts[(index1, index2)] > max_count) or \
+                   (counts[(index1, index2)] == max_count and vocab[index1] > vocab[max_pair[0]]) or \
+                   (counts[(index1, index2)] == max_count and vocab[index1] == vocab[max_pair[0]] and vocab[index2] > vocab[max_pair[1]]):
+                #    (counts[(index1, index2)] == max_count and cur_sub_str < max_sub_str):
+                    max_count = counts[(index1, index2)]
+                    max_pair = (index1, index2)
+                    max_sub_str = cur_sub_str
+                    # import pdb;pdb.set_trace()
+
+        if 0 == max_count:
+            break
+        
+        # "Find the most common pair."
+        # pair = max(counts, key=counts.get)  # @inspect pair
+        index1, index2 = max_pair
+        merges.append((vocab[index1], vocab[index2]))
+        # if len(merges) >= 60 and len(merges) <= 70:
+        #     print((vocab[index1], vocab[index2]), counts[(index1, index2)])
+        # import pdb;pdb.set_trace()
+
+        # Merge that pair.
+        new_index = cur_vocab_size
+        vocab[new_index] = vocab[index1] + vocab[index2]
+        for idx in range(indices_list_length):
+            indices_list[idx] = merge(indices_list[idx], max_pair, new_index) 
+
+        # update vocab_size
+        cur_vocab_size += 1
+
+    # print("684:", cur_vocab_size, vocab_size, len(vocab.keys()))
+    return vocab, merges
+    # raise NotImplementedError
