@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import os
 # 20250914 add regex, defaultdict
+# 20250915 add Pool
 import regex
 from collections import defaultdict
+from multiprocessing.pool import Pool
 from collections.abc import Iterable
 from typing import IO, Any, BinaryIO
 
@@ -547,15 +549,71 @@ GPT2_TOKENIZER_REGEX = \
 def merge(indices: list[int], pair: tuple[int, int], new_index: int) -> list[int]:  # @inspect indices, @inspect pair, @inspect new_index
     """Return `indices`, but with all instances of `pair` replaced with `new_index`."""
     new_indices = []  # @inspect new_indices
-    i = 0  # @inspect i
-    while i < len(indices):
-        if i + 1 < len(indices) and indices[i] == pair[0] and indices[i + 1] == pair[1]:
-            new_indices.append(new_index)
-            i += 2
-        else:
-            new_indices.append(indices[i])
-            i += 1
-    return new_indices
+    # i = 0  # @inspect i
+    # if pair[0] not in indices or pair[1] not in indices:
+    #     return indices
+
+    # indices_len = len(indices)
+    # while i < indices_len - 1:
+    #     if indices[i] == pair[0] and indices[i + 1] == pair[1]:
+    #         new_indices.append(new_index)
+    #         i += 2
+    #     else:
+    #         new_indices.append(indices[i])
+    #         i += 1
+    # if i < indices_len: 
+    #     new_indices.append(indices[i])
+    # return new_indices
+
+    # 直接返回
+    # if pair[0] not in indices or pair[1] not in indices:
+    #     return
+    
+    # 原地修改
+    indices_len = len(indices)
+    
+    i = 0
+    while i < indices_len - 1:
+        # match success
+        if indices[i] == pair[0] and indices[i + 1] == pair[1]:
+            indices[i] = new_index
+            del indices[i + 1]
+            indices_len -= 1
+        i += 1
+
+    # 删除结尾
+    del indices[indices_len:]
+    return indices_len
+
+def extract_segments_before_special_tokens(input_str: str, special_tokens: list[str]) -> list[str]:
+    """
+    删除输入字符串中的特殊标记，并提取删除后的前两段文本。
+    
+    Args:
+        input_str: 待处理的输入字符串（如 "hello [PAD] world [UNK]"）。
+        special_tokens: 需要删除的特殊标记列表（如 ["[PAD]", "[UNK]"]）。
+    
+    Returns:
+        删除特殊标记后的前两段文本（如 ["hello ", " world "]）。
+    """
+    # 处理空标记列表（直接返回原字符串的前两段，按空格分割）
+    if not special_tokens:
+        return input_str.split()[:2]  # 按空格分割，取前两段（可根据需求调整分割逻辑）
+    
+    # 转义特殊标记中的正则特殊字符（如 [、]、. 等）
+    escaped_tokens = [regex.escape(token) for token in special_tokens]
+    
+    # 构建正则表达式：匹配所有特殊标记（使用捕获组保留标记内容）
+    pattern = regex.compile(r'(' + '|'.join(escaped_tokens) + r')')
+    
+    # 分割输入字符串（结果包含标记前的文本、标记本身、标记后的文本，交替出现）
+    split_parts = pattern.split(input_str)
+    
+    # 提取所有非标记的文本部分（过滤掉特殊标记）
+    non_marker_parts = [part for part in split_parts if part not in special_tokens]
+    
+    # 返回前两段非标记文本（若不足两段，返回所有存在的部分）
+    return non_marker_parts
 
 def get_tokenizer(
     vocab: dict[int, bytes],
@@ -627,8 +685,15 @@ def run_train_bpe(
     # 读取输入文件
     with open(input_path, "r") as f:
         content = f.read()
+
+    # 切割字符串
+    split_content_list = extract_segments_before_special_tokens(content, special_tokens)
+    # import pdb;pdb.set_trace()
     pattern = GPT2_TOKENIZER_REGEX  # @inspect pattern
-    segments = regex.findall(pattern, content)  # @inspect segments
+    segments = list()
+    for split_content in split_content_list:
+        segments += regex.findall(pattern, split_content)  # @inspect segments
+    # segments = regex.findall(pattern, content)  # @inspect segments
     # special_pattern = "|".join(regex.escape(token) for token in special_tokens)
     # import pdb;pdb.set_trace()
 
@@ -638,50 +703,90 @@ def run_train_bpe(
     # indices = list(map(int, "你好".encode("utf-8")))→ [228, 189, 160, 229, 165, 189]。
     # indices = list(map(int, content.encode("utf-8"))) 
     # text("The GPT-2 paper used word-based tokenization to break up the text into inital segments and run the original BPE algorithm on each segment.")
-    indices_list = list()
+    segment_count_dict = defaultdict(int)
     for segment in segments:
-        indices_list.append(list(map(int, segment.encode("utf-8")))) 
-    indices_list_length = len(indices_list)
+        segment_count_dict[segment] += 1
+    segment_induce_dict = dict()
+    for segment in segment_count_dict.keys():
+        segment_induce_dict[segment] = list(map(int, segment.encode("utf-8")))
+
+    # max_pair
+    max_pair = None
+    max_pair_vocab = [0, 0]
     cur_vocab_size = len(vocab.keys())
+
     while cur_vocab_size < vocab_size:
         # 对于普通dict，如果访问不存在的键，会引发KeyError异常，而defaultdict则会返回默认值，并且自动将该键添加到字典中，值为默认值的结果。
-        # counts = dict()
-        counts = defaultdict(int)
         max_count = 0
-        max_pair = None
-        max_sub_str = None
-        for indices in indices_list:
-            for index1, index2 in zip(indices, indices[1:]):  # For each adjacent pair
-                cur_byte_pair = index1 + index2
-                if cur_byte_pair in special_token_vocab_list:
-                    continue
-                counts[(index1, index2)] += 1  # @inspect counts
-                cur_sub_str = vocab[index1] + vocab[index2]
-                if (counts[(index1, index2)] > max_count) or \
-                   (counts[(index1, index2)] == max_count and vocab[index1] > vocab[max_pair[0]]) or \
-                   (counts[(index1, index2)] == max_count and vocab[index1] == vocab[max_pair[0]] and vocab[index2] > vocab[max_pair[1]]):
-                #    (counts[(index1, index2)] == max_count and cur_sub_str < max_sub_str):
-                    max_count = counts[(index1, index2)]
-                    max_pair = (index1, index2)
-                    max_sub_str = cur_sub_str
-                    # import pdb;pdb.set_trace()
+        counts = defaultdict(int)
+        for segment in segment_count_dict.keys():
+            indices = segment_induce_dict[segment]
+            indices_len = len(indices)
+            # if indices_len <= 1:
+            #     continue
 
-        if 0 == max_count:
-            break
+            # 相邻合并对
+            # for index1, index2 in zip(indices, indices[1:]):  # For each adjacent pair
+            for jdx in range(indices_len - 1):
+                index1, index2 = indices[jdx], indices[jdx + 1]    
+                # 20250916 切换至extract_segments_before_special_tokens，事先切割完成
+                # cur_byte_pair = index1 + index2
+                # if cur_byte_pair in special_token_vocab_list:
+                #     continue
+
+                # update index_segment_dict
+                cur_pair = (index1, index2)
+                cur_count = counts[cur_pair]
+                cur_count += segment_count_dict[segment]
+                counts[cur_pair] = cur_count
+                if cur_count < max_count:
+                    continue
+
+                if cur_count > max_count:
+                    max_count = cur_count
+                    max_pair = cur_pair
+                    max_pair_vocab = (vocab[index1], vocab[index2])
+                    continue
+
+                # cur_vocab
+                cur_vocab_index1 = vocab[index1]
+                cur_vocab_index2 = vocab[index2]
+                if (cur_vocab_index1 > max_pair_vocab[0]) or \
+                   (cur_vocab_index1 == max_pair_vocab[0] and cur_vocab_index2 > max_pair_vocab[1]):
+                    max_count = cur_count
+                    max_pair = cur_pair
+                    max_pair_vocab = (cur_vocab_index1, cur_vocab_index2)
+
+        # 排序计数并获取最大值
+        # sorted_counts = sorted(
+        #     counts.items(),
+        #     key=lambda item: (
+        #         item[1],  # 按计数降序
+        #         vocab[item[0][0]],  # 按第一个词汇ID降序
+        #         vocab[item[0][1]]   # 按第二个词汇ID降序
+        #     ),
+        #     reverse=True,
+        # )
+        # max_pair, max_count = sorted_counts[0]
+        # max_pair_vocab = (vocab[max_pair[0]], vocab[max_pair[1]])
         
-        # "Find the most common pair."
-        # pair = max(counts, key=counts.get)  # @inspect pair
-        index1, index2 = max_pair
-        merges.append((vocab[index1], vocab[index2]))
-        # if len(merges) >= 60 and len(merges) <= 70:
-        #     print((vocab[index1], vocab[index2]), counts[(index1, index2)])
+        # update merges
+        merges.append(max_pair_vocab)
         # import pdb;pdb.set_trace()
+        # print(max_pair_vocab, max_count)
 
         # Merge that pair.
         new_index = cur_vocab_size
-        vocab[new_index] = vocab[index1] + vocab[index2]
-        for idx in range(indices_list_length):
-            indices_list[idx] = merge(indices_list[idx], max_pair, new_index) 
+        vocab[new_index] = max_pair_vocab[0] + max_pair_vocab[1]
+        segment_count_dict_key = list(segment_count_dict.keys())
+        for segment in segment_count_dict_key:
+            indices = segment_induce_dict[segment]
+            # 原地修改
+            if max_pair[0] not in indices or max_pair[1] not in indices:
+                continue
+            indices_len = merge(indices, max_pair, new_index) 
+            if indices_len == 1:
+                del segment_count_dict[segment]
 
         # update vocab_size
         cur_vocab_size += 1
