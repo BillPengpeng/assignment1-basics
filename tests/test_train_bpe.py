@@ -1,10 +1,10 @@
 import json
 import time
 
-from adapters import run_train_bpe
-from common import FIXTURES_PATH, gpt2_bytes_to_unicode
-# from .adapters import run_train_bpe
-# from .common import FIXTURES_PATH, gpt2_bytes_to_unicode
+# from adapters import run_train_bpe
+# from common import FIXTURES_PATH, gpt2_bytes_to_unicode
+from .adapters import run_train_bpe
+from .common import FIXTURES_PATH, gpt2_bytes_to_unicode
 
 def test_train_bpe_speed():
     """
@@ -22,7 +22,7 @@ def test_train_bpe_speed():
         special_tokens=["<|endoftext|>"],
     )
     end_time = time.time()
-    print(end_time - start_time)
+    # print("test_train_bpe_speed:", end_time - start_time)
     assert end_time - start_time < 1.5
 
 
@@ -73,6 +73,7 @@ def test_train_bpe_special_tokens(snapshot):
     Ensure that the special tokens are added to the vocabulary and not
     merged with other tokens.
     """
+    start_time = time.time()
     input_path = FIXTURES_PATH / "tinystories_sample_5M.txt"
     vocab, merges = run_train_bpe(
         input_path=input_path,
@@ -92,7 +93,10 @@ def test_train_bpe_special_tokens(snapshot):
             "merges": merges,
         },
     )
+    end_time = time.time()
+    # print("test_train_bpe_special_tokens:", end_time - start_time)
 
 if __name__ == "__main__":
     test_train_bpe()
     test_train_bpe_speed()
+    # test_train_bpe_special_tokens()
