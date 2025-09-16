@@ -713,49 +713,65 @@ def run_train_bpe(
     # max_pair
     max_pair = None
     max_pair_vocab = [0, 0]
+    max_pair_new_index = None
+    # 对于普通dict，如果访问不存在的键，会引发KeyError异常，而defaultdict则会返回默认值，并且自动将该键添加到字典中，值为默认值的结果。
+    counts = defaultdict(int)
     cur_vocab_size = len(vocab.keys())
 
     while cur_vocab_size < vocab_size:
-        # 对于普通dict，如果访问不存在的键，会引发KeyError异常，而defaultdict则会返回默认值，并且自动将该键添加到字典中，值为默认值的结果。
         max_count = 0
-        counts = defaultdict(int)
+        # max_pair = None
+        # counts = defaultdict(int)
         for segment in segment_count_dict.keys():
             indices = segment_induce_dict[segment]
-            indices_len = len(indices)
-            # if indices_len <= 1:
-            #     continue
+
+            # max_pair
+            if max_pair is not None and \
+               max_pair[0] not in indices and \
+               max_pair[1] not in indices and \
+               max_pair_new_index not in indices:
+                continue
 
             # 相邻合并对
-            # for index1, index2 in zip(indices, indices[1:]):  # For each adjacent pair
+            indices_len = len(indices)
             for jdx in range(indices_len - 1):
-                index1, index2 = indices[jdx], indices[jdx + 1]    
-                # 20250916 切换至extract_segments_before_special_tokens，事先切割完成
-                # cur_byte_pair = index1 + index2
-                # if cur_byte_pair in special_token_vocab_list:
-                #     continue
+                index1, index2 = indices[jdx], indices[jdx + 1]  
+                if max_pair is not None and \
+                   index1 not in max_pair and \
+                   index2 not in max_pair and \
+                   index1 != max_pair_new_index and \
+                   index2 != max_pair_new_index:
+                    continue
 
                 # update index_segment_dict
                 cur_pair = (index1, index2)
-                cur_count = counts[cur_pair]
-                cur_count += segment_count_dict[segment]
-                counts[cur_pair] = cur_count
-                if cur_count < max_count:
-                    continue
+                counts[cur_pair] += segment_count_dict[segment]
+                
+        # max_pair
+        for cur_pair in counts.keys():
+            cur_count = counts[cur_pair]
+            if cur_count < max_count:
+                continue
 
-                if cur_count > max_count:
-                    max_count = cur_count
-                    max_pair = cur_pair
-                    max_pair_vocab = (vocab[index1], vocab[index2])
-                    continue
+            if cur_count > max_count:
+                max_count = cur_count
+                max_pair = cur_pair
+                continue
 
-                # cur_vocab
-                cur_vocab_index1 = vocab[index1]
-                cur_vocab_index2 = vocab[index2]
-                if (cur_vocab_index1 > max_pair_vocab[0]) or \
-                   (cur_vocab_index1 == max_pair_vocab[0] and cur_vocab_index2 > max_pair_vocab[1]):
-                    max_count = cur_count
-                    max_pair = cur_pair
-                    max_pair_vocab = (cur_vocab_index1, cur_vocab_index2)
+            # cur_vocab
+            index1, index2 = cur_pair[0], cur_pair[1] 
+            if (vocab[index1] > vocab[max_pair[0]]) or \
+               (vocab[index1] == vocab[max_pair[0]] and vocab[index2] > vocab[max_pair[1]]):
+                max_count = cur_count
+                max_pair = cur_pair
+
+        # reset count
+        for cur_pair in counts.keys():
+            if cur_pair[0] not in max_pair and \
+               cur_pair[1] not in max_pair:
+                continue
+            counts[cur_pair] = 0
+
 
         # 排序计数并获取最大值
         # sorted_counts = sorted(
@@ -771,26 +787,24 @@ def run_train_bpe(
         # max_pair_vocab = (vocab[max_pair[0]], vocab[max_pair[1]])
         
         # update merges
+        max_pair_vocab = (vocab[max_pair[0]], vocab[max_pair[1]])
         merges.append(max_pair_vocab)
         # import pdb;pdb.set_trace()
-        # print(max_pair_vocab, max_count)
+        # print(max_pair_vocab, max_count, max_pair)
 
         # Merge that pair.
-        new_index = cur_vocab_size
-        vocab[new_index] = max_pair_vocab[0] + max_pair_vocab[1]
+        max_pair_new_index = cur_vocab_size
+        vocab[max_pair_new_index] = max_pair_vocab[0] + max_pair_vocab[1]
         segment_count_dict_key = list(segment_count_dict.keys())
         for segment in segment_count_dict_key:
             indices = segment_induce_dict[segment]
             # 原地修改
             if max_pair[0] not in indices or max_pair[1] not in indices:
                 continue
-            indices_len = merge(indices, max_pair, new_index) 
-            if indices_len == 1:
-                del segment_count_dict[segment]
+            indices_len = merge(indices, max_pair, max_pair_new_index) 
 
         # update vocab_size
         cur_vocab_size += 1
 
-    # print("684:", cur_vocab_size, vocab_size, len(vocab.keys()))
     return vocab, merges
     # raise NotImplementedError
