@@ -9,8 +9,10 @@ import psutil
 import pytest
 import tiktoken
 
-from .adapters import get_tokenizer
-from .common import FIXTURES_PATH, gpt2_bytes_to_unicode
+from adapters import get_tokenizer
+from common import FIXTURES_PATH, gpt2_bytes_to_unicode
+# from .adapters import get_tokenizer
+# from .common import FIXTURES_PATH, gpt2_bytes_to_unicode
 
 VOCAB_PATH = FIXTURES_PATH / "gpt2_vocab.json"
 MERGES_PATH = FIXTURES_PATH / "gpt2_merges.txt"
@@ -287,8 +289,11 @@ def test_address_matches_tiktoken():
     corpus_path = FIXTURES_PATH / "address.txt"
     with open(corpus_path) as f:
         corpus_contents = f.read()
+    # corpus_contents = "Four"
     reference_ids = reference_tokenizer.encode(corpus_contents)
     ids = tokenizer.encode(corpus_contents)
+    # print(reference_ids)
+    # print(ids)
     assert ids == reference_ids
 
     assert tokenizer.decode(ids) == corpus_contents
@@ -362,6 +367,7 @@ def test_encode_special_token_trailing_newlines():
         corpus_contents = f.read()
     reference_ids = reference_tokenizer.encode(corpus_contents, allowed_special={"<|endoftext|>"})
     ids = tokenizer.encode(corpus_contents)
+    # print(ids, reference_ids)
     assert ids == reference_ids
 
     assert tokenizer.decode(ids) == corpus_contents
@@ -466,3 +472,28 @@ def _encode(tokenizer, text):
     for just this function. We set the memory limit to 1MB.
     """
     return tokenizer.encode(text)
+
+if __name__ == "__main__":
+    # test_roundtrip_empty()
+    # test_empty_matches_tiktoken()
+    # test_roundtrip_single_character()
+    # test_single_character_matches_tiktoken()
+    # test_roundtrip_single_unicode_character()
+    # test_single_unicode_character_matches_tiktoken()
+    # test_roundtrip_ascii_string()
+    # test_ascii_string_matches_tiktoken()
+    # test_roundtrip_unicode_string()
+    # test_unicode_string_matches_tiktoken()
+    # test_roundtrip_unicode_string_with_special_tokens()
+    # test_unicode_string_with_special_tokens_matches_tiktoken()
+    # test_overlapping_special_tokens()
+    # test_address_roundtrip()
+    # test_address_matches_tiktoken()
+    # test_german_roundtrip()
+    # test_german_matches_tiktoken()
+    # test_tinystories_sample_roundtrip()
+    # test_tinystories_matches_tiktoken()
+    test_encode_special_token_trailing_newlines()
+    test_encode_special_token_double_newline_non_whitespace()
+    test_encode_iterable_tinystories_sample_roundtrip()
+    test_encode_iterable_tinystories_matches_tiktoken()

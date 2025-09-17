@@ -5,6 +5,9 @@ import os
 # 20250915 add Pool
 import regex
 from collections import defaultdict
+# 20250916 add ABC, dataclass
+from abc import ABC
+from dataclasses import dataclass
 from multiprocessing.pool import Pool
 from collections.abc import Iterable
 from typing import IO, Any, BinaryIO
@@ -14,6 +17,9 @@ import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
+# 20250916 gpt2_bytes_to_unicode
+# from common import FIXTURES_PATH, gpt2_bytes_to_unicode
+# from .common import FIXTURES_PATH, gpt2_bytes_to_unicode
 
 def run_linear(
     d_in: int,
@@ -585,7 +591,7 @@ def merge(indices: list[int], pair: tuple[int, int], new_index: int) -> list[int
     del indices[indices_len:]
     return indices_len
 
-def extract_segments_before_special_tokens(input_str: str, special_tokens: list[str]) -> list[str]:
+def extract_segments_before_special_tokens(input_str: str, special_tokens: list[str], filter=True) -> list[str]:
     """
     删除输入字符串中的特殊标记，并提取删除后的前两段文本。
     
@@ -598,22 +604,177 @@ def extract_segments_before_special_tokens(input_str: str, special_tokens: list[
     """
     # 处理空标记列表（直接返回原字符串的前两段，按空格分割）
     if not special_tokens:
-        return input_str.split()[:2]  # 按空格分割，取前两段（可根据需求调整分割逻辑）
+        return [input_str]  # 按空格分割，取前两段（可根据需求调整分割逻辑）
     
-    # 转义特殊标记中的正则特殊字符（如 [、]、. 等）
-    escaped_tokens = [regex.escape(token) for token in special_tokens]
+    # # 转义特殊标记中的正则特殊字符（如 [、]、. 等）
+    # escaped_tokens = [regex.escape(token) for token in special_tokens]
     
-    # 构建正则表达式：匹配所有特殊标记（使用捕获组保留标记内容）
-    pattern = regex.compile(r'(' + '|'.join(escaped_tokens) + r')')
+    # # 构建正则表达式：匹配所有特殊标记（使用捕获组保留标记内容）
+    # pattern = regex.compile(r'(' + '|'.join(escaped_tokens) + r')')
     
-    # 分割输入字符串（结果包含标记前的文本、标记本身、标记后的文本，交替出现）
-    split_parts = pattern.split(input_str)
+    # # 分割输入字符串（结果包含标记前的文本、标记本身、标记后的文本，交替出现）
+    # split_parts = pattern.split(input_str)
+
+    split_parts = [input_str] 
+    # aim to ["<|endoftext|>", "<|endoftext|><|endoftext|>"]
+    special_tokens = sorted(special_tokens, key=lambda s: (-len(s), s))
+    for token in special_tokens:
+        new_split_parts = list()
+        for parts in split_parts:
+            if token not in parts or (parts in special_tokens):
+                new_split_parts.append(parts)
+            else:
+                # import pdb;pdb.set_trace()
+                parts = parts.split(token)
+                for part in parts:
+                    if len(part) > 0:
+                        new_split_parts.append(part)
+                    new_split_parts.append(token)
+                    # import pdb;pdb.set_trace()
+                del new_split_parts[-1]
+        split_parts = new_split_parts
+
+    # print(split_parts)
+
+    if not filter:
+        # import pdb;pdb.set_trace()
+        return split_parts
     
     # 提取所有非标记的文本部分（过滤掉特殊标记）
     non_marker_parts = [part for part in split_parts if part not in special_tokens]
     
     # 返回前两段非标记文本（若不足两段，返回所有存在的部分）
     return non_marker_parts
+
+# @dataclass(frozen=True)是 Python 中用于定义不可变数据类的装饰器，确保类的实例属性在初始化后无法被修改
+@dataclass(frozen=True)
+class BPETokenizerParams:
+    """All you need to specify a BPETokenizer."""
+    vocab: dict[int, bytes]     # index -> bytes
+    merges: dict[tuple[int, int], int]  # index1,index2 -> new_index
+    special_tokens: list[str]
+
+# 抽象基类（ABC）是 Python 中通过 abc模块实现的特殊类，​​不能被直接实例化​​，只能被继承
+class Tokenizer(ABC):
+    """Abstract interface for a tokenizer."""
+    def encode(self, string: str) -> list[int]:
+        raise NotImplementedError
+
+    def decode(self, indices: list[int]) -> str:
+        raise NotImplementedError
+
+
+class BPETokenizer(Tokenizer):
+    """BPE tokenizer given a set of merges and a vocabulary."""
+    def __init__(self, params: BPETokenizerParams):
+        self.params = params
+        # unicode => bytes
+        # self.gpt2_byte_decoder = {v: k for k, v in gpt2_bytes_to_unicode().items()}
+        self.special_tokens_dict = dict()
+        self.vocab_index_dict = {v: k for k, v in self.params.vocab.items()}
+        # import pdb;pdb.set_trace()
+        if self.params.special_tokens is not None:
+            for special_token in self.params.special_tokens:
+                byte_encoded_special_token = special_token.encode("utf-8")
+                self.special_tokens_dict[special_token] = self.vocab_index_dict[byte_encoded_special_token]
+                # print(byte_encoded_special_token, self.special_tokens_dict[special_token])
+
+    def encode(self, string: str) -> list[int]:
+        # indices = list(map(int, string.encode("utf-8")))  # @inspect indices
+        # 切割字符串
+        split_content_list = extract_segments_before_special_tokens(string, self.params.special_tokens, filter=False)
+        pattern = GPT2_TOKENIZER_REGEX  # @inspect pattern
+        segments = list()
+        # ignore
+        # for split_content in split_content_list:
+        #     if split_content in self.special_tokens_dict.keys():
+        #         segments.append(split_content)
+        #     else:
+        #         segments += regex.findall(pattern, split_content)  # @inspect segments 
+
+        for split_content in split_content_list:
+            if split_content in self.special_tokens_dict.keys() or ("\n" not in split_content): 
+                segments.append(split_content)
+            else:
+                # 将换行符替换为独立标记 <newline> 
+                parts = split_content.split("\n")
+                for part in parts:
+                    if len(part) > 0:
+                        segments.append(part)
+                    segments.append("\n")
+                del segments[-1]
+
+        # 合并\n
+        segments_size = len(segments)
+        i = 1
+        while i < segments_size:
+            if segments[i - 1].endswith("\n") and segments[i] == "\n" and \
+               (i == segments_size - 1 or segments[i + 1] == "\n"):
+               segments[i - 1] += "\n"
+               del segments[i]
+               segments_size -= 1
+            else:
+                i += 1
+    
+
+        # print(segments)
+        # segments = split_content_list
+
+        # str => utf-8 => int
+        segment_induce_dict = dict()
+        for segment in set(segments):
+            if segment in self.special_tokens_dict.keys():
+                segment_induce_dict[segment] = self.special_tokens_dict[segment]
+            else:
+                # segment_induce_dict[segment] = list(map(int, segment.encode("utf-8")))
+                segment_induce_dict[segment] = list()
+                # import pdb;pdb.set_trace()
+                for ch in segment.encode("utf-8"):
+                    # unicode => byte
+                    cur_bytes = bytes([ch])
+                    segment_induce_dict[segment].append(self.vocab_index_dict[cur_bytes])
+                
+
+        # merge
+        for segment in segment_induce_dict.keys():
+            for pair, new_index in self.params.merges.items():  # @inspect pair, @inspect new_index
+                if segment in self.special_tokens_dict.keys():
+                    continue
+                if len(segment_induce_dict[segment]) <= 1:
+                    break
+                merge(segment_induce_dict[segment], pair, new_index)
+
+        # result
+        result_indices = list()
+        for segment in segments:
+            if segment in self.special_tokens_dict.keys():
+                result_indices.append(segment_induce_dict[segment])
+            else:
+                result_indices += segment_induce_dict[segment]
+        # print(string, result_indices)
+        return result_indices
+
+    def decode(self, indices: list[int]) -> str:
+        bytes_list = list(map(self.params.vocab.get, indices))  # @inspect bytes_list
+        string = b"".join(bytes_list).decode("utf-8", errors='ignore')  # @inspect string
+        # print(indices, string)
+        return string
+
+
+        # unicode_list = list(map(self.params.vocab.get, indices))  # @inspect bytes_list
+        # print("unicode_list:", unicode_list)
+        # # import pdb;pdb.set_trace()
+        # bytes_list = [bytes(unicode).decode("utf-8") for unicode in unicode_list]
+        # print("unicode_list:", unicode_list, bytes_list)
+
+        # string = b"".join(bytes_list).decode("utf-8")  # @inspect string
+
+
+        # bytes_list = [self.gpt2_byte_decoder[unicode] for unicode in unicode_list]
+        # print("unicode_list:", unicode_list, bytes_list)
+        # string = "".join(bytes_list)
+        # print("string:", string)
+        # return string
 
 def get_tokenizer(
     vocab: dict[int, bytes],
@@ -635,7 +796,17 @@ def get_tokenizer(
     Returns:
         A BPE tokenizer that uses the provided vocab, merges, and special tokens.
     """
-    raise NotImplementedError
+    merges_dict: dict[tuple[int, int], int] = dict()
+    vocab_index_dict = {v: k for k, v in vocab.items()}
+
+    for byte1, byte2 in merges:
+        find_index_byte1 = vocab_index_dict[byte1]
+        find_index_byte2 = vocab_index_dict[byte2]
+        find_index_merge = vocab_index_dict[byte1+byte2]
+        merges_dict[(find_index_byte1, find_index_byte2)] = find_index_merge
+
+    return BPETokenizer(BPETokenizerParams(vocab, merges_dict, special_tokens))
+    # raise NotImplementedError
 
 
 def run_train_bpe(

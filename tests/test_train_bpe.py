@@ -24,6 +24,7 @@ def test_train_bpe_speed():
     end_time = time.time()
     # print("test_train_bpe_speed:", end_time - start_time)
     assert end_time - start_time < 1.5
+    # import pdb;pdb.set_trace()
 
 
 def test_train_bpe():
