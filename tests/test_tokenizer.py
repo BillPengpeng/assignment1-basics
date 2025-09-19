@@ -8,11 +8,12 @@ import sys
 import psutil
 import pytest
 import tiktoken
+import time
 
-from adapters import get_tokenizer
-from common import FIXTURES_PATH, gpt2_bytes_to_unicode
-# from .adapters import get_tokenizer
-# from .common import FIXTURES_PATH, gpt2_bytes_to_unicode
+# from adapters import get_tokenizer
+# from common import FIXTURES_PATH, gpt2_bytes_to_unicode
+from .adapters import get_tokenizer
+from .common import FIXTURES_PATH, gpt2_bytes_to_unicode
 
 VOCAB_PATH = FIXTURES_PATH / "gpt2_vocab.json"
 MERGES_PATH = FIXTURES_PATH / "gpt2_merges.txt"
@@ -399,6 +400,7 @@ def test_encode_iterable_tinystories_sample_roundtrip():
     with open(FIXTURES_PATH / "tinystories_sample.txt") as f:
         for _id in tokenizer.encode_iterable(f):
             all_ids.append(_id)
+    # print(all_ids)
     with open(FIXTURES_PATH / "tinystories_sample.txt") as f:
         corpus_contents = f.read()
     assert tokenizer.decode(all_ids) == corpus_contents
@@ -432,10 +434,15 @@ def test_encode_iterable_memory_usage():
         vocab_path=VOCAB_PATH,
         merges_path=MERGES_PATH,
     )
+    start_time = time.time()
+    # V1.0 tinystories_sample.txt  2.88 => 0.58
     with open(FIXTURES_PATH / "tinystories_sample_5M.txt") as f:
+    # with open(FIXTURES_PATH / "tinystories_sample.txt") as f:
         ids = []
         for _id in _encode_iterable(tokenizer, f):
             ids.append(_id)
+    end_time = time.time()
+    print("test_encode_iterable_memory_usage:", end_time - start_time)
 
 
 @pytest.mark.skipif(
@@ -447,6 +454,7 @@ def test_encode_memory_usage():
     """
     We expect this test to fail, since Tokenizer.encode is not expected to be memory efficient.
     """
+    start_time = time.time()
     tokenizer = get_tokenizer_from_vocab_merges_path(
         vocab_path=VOCAB_PATH,
         merges_path=MERGES_PATH,
@@ -454,6 +462,8 @@ def test_encode_memory_usage():
     with open(FIXTURES_PATH / "tinystories_sample_5M.txt") as f:
         contents = f.read()
         _ = _encode(tokenizer, contents)
+    end_time = time.time()
+    print("test_encode_memory_usage:", end_time - start_time)
 
 
 @memory_limit(int(1e6))
@@ -474,26 +484,28 @@ def _encode(tokenizer, text):
     return tokenizer.encode(text)
 
 if __name__ == "__main__":
-    # test_roundtrip_empty()
-    # test_empty_matches_tiktoken()
-    # test_roundtrip_single_character()
-    # test_single_character_matches_tiktoken()
-    # test_roundtrip_single_unicode_character()
-    # test_single_unicode_character_matches_tiktoken()
-    # test_roundtrip_ascii_string()
-    # test_ascii_string_matches_tiktoken()
-    # test_roundtrip_unicode_string()
-    # test_unicode_string_matches_tiktoken()
-    # test_roundtrip_unicode_string_with_special_tokens()
-    # test_unicode_string_with_special_tokens_matches_tiktoken()
-    # test_overlapping_special_tokens()
-    # test_address_roundtrip()
-    # test_address_matches_tiktoken()
-    # test_german_roundtrip()
-    # test_german_matches_tiktoken()
-    # test_tinystories_sample_roundtrip()
-    # test_tinystories_matches_tiktoken()
+    test_roundtrip_empty()
+    test_empty_matches_tiktoken()
+    test_roundtrip_single_character()
+    test_single_character_matches_tiktoken()
+    test_roundtrip_single_unicode_character()
+    test_single_unicode_character_matches_tiktoken()
+    test_roundtrip_ascii_string()
+    test_ascii_string_matches_tiktoken() #
+    test_roundtrip_unicode_string()
+    test_unicode_string_matches_tiktoken()
+    test_roundtrip_unicode_string_with_special_tokens()
+    test_unicode_string_with_special_tokens_matches_tiktoken()
+    test_overlapping_special_tokens()
+    test_address_roundtrip()
+    test_address_matches_tiktoken()
+    test_german_roundtrip()
+    test_german_matches_tiktoken()
+    test_tinystories_sample_roundtrip()
+    test_tinystories_matches_tiktoken()
     test_encode_special_token_trailing_newlines()
     test_encode_special_token_double_newline_non_whitespace()
     test_encode_iterable_tinystories_sample_roundtrip()
     test_encode_iterable_tinystories_matches_tiktoken()
+    test_encode_iterable_memory_usage()
+    test_encode_memory_usage()

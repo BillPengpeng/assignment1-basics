@@ -4,10 +4,18 @@ import os
 # 20250914 add regex, defaultdict
 # 20250915 add Pool
 import regex
+# 20250918 add time
+import time
 from collections import defaultdict
+# 20250919 add deque
+from collections import deque
 # 20250916 add ABC, dataclass
 from abc import ABC
 from dataclasses import dataclass
+
+# 20250918 add partial, multiprocessing
+from functools import partial
+import multiprocessing
 from multiprocessing.pool import Pool
 from collections.abc import Iterable
 from typing import IO, Any, BinaryIO
@@ -591,6 +599,38 @@ def merge(indices: list[int], pair: tuple[int, int], new_index: int) -> list[int
     del indices[indices_len:]
     return indices_len
 
+def process_segment_shared(
+    segment: str,
+    shared_dict: multiprocessing.managers.DictProxy,
+    # merges: Dict[Tuple[int, int], int],
+    pair: tuple[int, int], 
+    new_index: int,
+    special_tokens: Dict[str, int]
+):
+    """处理单个segment（共享内存版本）"""
+    if segment in special_tokens.keys():
+        return
+
+    induces = shared_dict[segment]
+    if len(induces) <= 1:
+        return
+    induces = merge(induces, pair, new_index)
+
+    # print(segment, induces)
+    # for pair, new_index in merges.items():
+    #     try:
+    #         print(induces, segment)
+    #         if len(induces) <= 1:
+    #             break
+    #         induces = merge(induces, pair, new_index)
+            
+    #     except:
+            
+    #         import pdb;pdb.set_trace()
+    
+    # # 更新共享字典
+    # shared_dict[segment] = induces
+
 def extract_segments_before_special_tokens(input_str: str, special_tokens: list[str], filter=True) -> list[str]:
     """
     删除输入字符串中的特殊标记，并提取删除后的前两段文本。
@@ -672,6 +712,7 @@ class BPETokenizer(Tokenizer):
         # self.gpt2_byte_decoder = {v: k for k, v in gpt2_bytes_to_unicode().items()}
         self.special_tokens_dict = dict()
         self.vocab_index_dict = {v: k for k, v in self.params.vocab.items()}
+        self.vocab_merge_dict = {k: False for k, v in self.params.vocab.items()}
         # import pdb;pdb.set_trace()
         if self.params.special_tokens is not None:
             for special_token in self.params.special_tokens:
@@ -679,9 +720,50 @@ class BPETokenizer(Tokenizer):
                 self.special_tokens_dict[special_token] = self.vocab_index_dict[byte_encoded_special_token]
                 # print(byte_encoded_special_token, self.special_tokens_dict[special_token])
 
+        for pair, new_index in self.params.merges.items(): 
+            # self.vocab_merge_dict[pair[0]] = True
+            self.vocab_merge_dict[pair[1]] = True
+
+        # encode_iterable
+        # self.encode_buffer = ""
+        self.max_special_token_len = 0
+        if self.params.special_tokens is not None:
+            for special_token in self.params.special_tokens:
+                self.max_special_token_len = len(special_token) if len(special_token) > self.max_special_token_len else 0
+
+        # chunk_size
+        self.chunk_size = 4096  # 4KB块
+ 
+
+    def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
+        buffer = ""
+        buffer_len = 0
+        for text_chunk in iterable:
+            # print("688:", text_chunk, self.params.special_tokens[0], self.params.special_tokens[0] in text_chunk)
+            buffer += text_chunk
+            buffer_len += len(text_chunk)
+
+            # special_token
+            check_token_len = self.max_special_token_len
+            if self.params.special_tokens is not None and buffer_len >= check_token_len:
+                for special_token in self.params.special_tokens:
+                    pos = buffer.find(special_token, -check_token_len, -1)
+                    if pos > 0:
+                        sub_buffer = buffer[:pos]
+                        buffer = buffer[pos:]
+                        buffer_len -= pos
+                        yield from iter(self.encode(sub_buffer))
+
+        # Last buffer
+        if buffer_len > 0:
+            # self.encode_buffer = ""
+            yield from iter(self.encode(buffer))
+        
+
     def encode(self, string: str) -> list[int]:
         # indices = list(map(int, string.encode("utf-8")))  # @inspect indices
         # 切割字符串
+        
         split_content_list = extract_segments_before_special_tokens(string, self.params.special_tokens, filter=False)
         pattern = GPT2_TOKENIZER_REGEX  # @inspect pattern
         segments = list()
@@ -691,7 +773,6 @@ class BPETokenizer(Tokenizer):
         #         segments.append(split_content)
         #     else:
         #         segments += regex.findall(pattern, split_content)  # @inspect segments 
-
         for split_content in split_content_list:
             if split_content in self.special_tokens_dict.keys() or ("\n" not in split_content): 
                 segments.append(split_content)
@@ -715,66 +796,117 @@ class BPETokenizer(Tokenizer):
                segments_size -= 1
             else:
                 i += 1
+        
+        # import pdb;pdb.set_trace()
     
 
         # print(segments)
         # segments = split_content_list
 
         # str => utf-8 => int
-        segment_induce_dict = dict()
+        segment_indice_dict = dict()
         for segment in set(segments):
             if segment in self.special_tokens_dict.keys():
-                segment_induce_dict[segment] = self.special_tokens_dict[segment]
+                segment_indice_dict[segment] = [self.special_tokens_dict[segment]]
             else:
                 # segment_induce_dict[segment] = list(map(int, segment.encode("utf-8")))
-                segment_induce_dict[segment] = list()
+                segment_indice_dict[segment] = list()
+                # print("803:", len(segment_indice_dict.keys()))
                 # import pdb;pdb.set_trace()
                 for ch in segment.encode("utf-8"):
                     # unicode => byte
                     cur_bytes = bytes([ch])
-                    segment_induce_dict[segment].append(self.vocab_index_dict[cur_bytes])
+                    segment_indice_dict[segment].append(self.vocab_index_dict[cur_bytes])
                 
-
         # merge
-        for segment in segment_induce_dict.keys():
+        for segment in segment_indice_dict.keys():
+            if segment in self.special_tokens_dict.keys():
+                continue
+
+            indices = segment_indice_dict[segment]
             for pair, new_index in self.params.merges.items():  # @inspect pair, @inspect new_index
-                if segment in self.special_tokens_dict.keys():
-                    continue
-                if len(segment_induce_dict[segment]) <= 1:
+                if len(indices) <= 1:
                     break
-                merge(segment_induce_dict[segment], pair, new_index)
+                 # 原地修改
+                if pair[0] not in indices or pair[1] not in indices:
+                    continue
+                merge(indices, pair, new_index)
 
         # result
         result_indices = list()
         for segment in segments:
-            if segment in self.special_tokens_dict.keys():
-                result_indices.append(segment_induce_dict[segment])
-            else:
-                result_indices += segment_induce_dict[segment]
-        # print(string, result_indices)
+            result_indices += segment_indice_dict[segment]
         return result_indices
+
+        # indices_generator = self._encode_generator(segments)
+        # return list(indices_generator)  # 最终必须返回列表
+
+
+    def _encode_generator(self, segments: list[int]):
+        """生成器实现，逐步产生 token 索引"""
+
+        for segment in segments:
+            if segment in self.special_tokens_dict.keys():
+                yield self.special_tokens_dict[segment]
+            else:
+                indices = list()
+                for ch in segment.encode("utf-8"):
+                    cur_bytes = bytes([ch])
+                    cur_index = self.vocab_index_dict[cur_bytes]
+                    indices.append(cur_index)
+
+                # other
+                for pair, new_index in self.params.merges.items():  # @inspect pair, @inspect new_index
+                    if len(indices) <= 1:
+                        break
+                    # 原地修改
+                    if pair[0] not in indices or pair[1] not in indices:
+                        continue
+                    merge(indices, pair, new_index)
+
+                # 逐步产生索引
+                for idx in indices:
+                    yield idx
+
+                # buffer = list()
+                # byte_seq = segment.encode("utf-8")
+                # for i in range(0, len(byte_seq), self.chunk_size):
+                #     chunk = byte_seq[i:i+self.chunk_size]
+                #     indices = list()
+                #     for ch in chunk:
+                #         cur_bytes = bytes([ch])
+                #         cur_index = self.vocab_index_dict[cur_bytes]
+                #         indices.append(cur_index)
+
+                #     # other
+                #     for pair, new_index in self.params.merges.items():  # @inspect pair, @inspect new_index
+                #         if len(indices) <= 1:
+                #             break
+                #         # 原地修改
+                #         if pair[0] not in indices or pair[1] not in indices:
+                #             continue
+                #         merge(indices, pair, new_index)
+
+                #     # 逐步产生索引
+                #     for idx in indices:
+                #         yield idx
+
+
+
+    # def _is_stable(self, token: int) -> bool:
+    #     """检查token是否稳定（不再参与合并）"""
+    #     # 检查token是否能与右侧token合并
+    #     for pair in self.params.merges.keys():
+    #         if pair[0] == token:
+    #             return False
+    #     return True
+
 
     def decode(self, indices: list[int]) -> str:
         bytes_list = list(map(self.params.vocab.get, indices))  # @inspect bytes_list
         string = b"".join(bytes_list).decode("utf-8", errors='ignore')  # @inspect string
         # print(indices, string)
         return string
-
-
-        # unicode_list = list(map(self.params.vocab.get, indices))  # @inspect bytes_list
-        # print("unicode_list:", unicode_list)
-        # # import pdb;pdb.set_trace()
-        # bytes_list = [bytes(unicode).decode("utf-8") for unicode in unicode_list]
-        # print("unicode_list:", unicode_list, bytes_list)
-
-        # string = b"".join(bytes_list).decode("utf-8")  # @inspect string
-
-
-        # bytes_list = [self.gpt2_byte_decoder[unicode] for unicode in unicode_list]
-        # print("unicode_list:", unicode_list, bytes_list)
-        # string = "".join(bytes_list)
-        # print("string:", string)
-        # return string
 
 def get_tokenizer(
     vocab: dict[int, bytes],
