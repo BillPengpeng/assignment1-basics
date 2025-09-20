@@ -645,15 +645,6 @@ def extract_segments_before_special_tokens(input_str: str, special_tokens: list[
     # 处理空标记列表（直接返回原字符串的前两段，按空格分割）
     if not special_tokens:
         return [input_str]  # 按空格分割，取前两段（可根据需求调整分割逻辑）
-    
-    # # 转义特殊标记中的正则特殊字符（如 [、]、. 等）
-    # escaped_tokens = [regex.escape(token) for token in special_tokens]
-    
-    # # 构建正则表达式：匹配所有特殊标记（使用捕获组保留标记内容）
-    # pattern = regex.compile(r'(' + '|'.join(escaped_tokens) + r')')
-    
-    # # 分割输入字符串（结果包含标记前的文本、标记本身、标记后的文本，交替出现）
-    # split_parts = pattern.split(input_str)
 
     split_parts = [input_str] 
     # aim to ["<|endoftext|>", "<|endoftext|><|endoftext|>"]
@@ -674,10 +665,11 @@ def extract_segments_before_special_tokens(input_str: str, special_tokens: list[
                 del new_split_parts[-1]
         split_parts = new_split_parts
 
-    # print(split_parts)
+    desired_num_chunks = 4
+    file_size = len(input_str)
+    chunk_size = file_size // desired_num_chunks
 
     if not filter:
-        # import pdb;pdb.set_trace()
         return split_parts
     
     # 提取所有非标记的文本部分（过滤掉特殊标记）

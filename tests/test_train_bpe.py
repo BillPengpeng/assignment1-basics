@@ -22,7 +22,7 @@ def test_train_bpe_speed():
         special_tokens=["<|endoftext|>"],
     )
     end_time = time.time()
-    # print("test_train_bpe_speed:", end_time - start_time)
+    print("test_train_bpe_speed:", end_time - start_time)
     assert end_time - start_time < 1.5
     # import pdb;pdb.set_trace()
 
@@ -95,7 +95,7 @@ def test_train_bpe_special_tokens(snapshot):
         },
     )
     end_time = time.time()
-    # print("test_train_bpe_special_tokens:", end_time - start_time)
+    print("test_train_bpe_special_tokens:", end_time - start_time)
 
 if __name__ == "__main__":
     test_train_bpe()
