@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import os
-# 20250914 add regex, defaultdict
-# 20250915 add Pool
 import regex
-# 20250918 add time
-import time
+import time, json
 from collections import defaultdict
 # 20250919 add deque
 from collections import deque
@@ -25,9 +22,8 @@ import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
-# 20250916 gpt2_bytes_to_unicode
-# from common import FIXTURES_PATH, gpt2_bytes_to_unicode
-# from .common import FIXTURES_PATH, gpt2_bytes_to_unicode
+# 20250921
+from tests.common import gpt2_bytes_to_unicode
 
 def run_linear(
     d_in: int,
@@ -746,47 +742,90 @@ class Tokenizer(ABC):
 
 class BPETokenizer(Tokenizer):
     """BPE tokenizer given a set of merges and a vocabulary."""
-    def __init__(self, params: BPETokenizerParams):
-        self.params = params
-        # unicode => bytes
-        # self.gpt2_byte_decoder = {v: k for k, v in gpt2_bytes_to_unicode().items()}
+    def __init__(self, 
+        vocab: dict[int, bytes],
+        merges: list[tuple[bytes, bytes]],
+        special_tokens: list[str] | None = None,
+    ):
+        # init
+        self.vocab = vocab
+        self.merges_dict: dict[tuple[int, int], int] = dict()
+        self.special_tokens = special_tokens
+        vocab_index_dict = {v: k for k, v in vocab.items()}
+        for byte1, byte2 in merges:
+            find_index_byte1 = vocab_index_dict[byte1]
+            find_index_byte2 = vocab_index_dict[byte2]
+            find_index_merge = vocab_index_dict[byte1+byte2]
+            self.merges_dict[(find_index_byte1, find_index_byte2)] = find_index_merge
+
+        # special_tokens
         self.special_tokens_dict = dict()
-        self.vocab_index_dict = {v: k for k, v in self.params.vocab.items()}
-        self.vocab_merge_dict = {k: False for k, v in self.params.vocab.items()}
-        # import pdb;pdb.set_trace()
-        if self.params.special_tokens is not None:
-            for special_token in self.params.special_tokens:
+        self.vocab_index_dict = {v: k for k, v in self.vocab.items()}
+        if self.special_tokens is not None:
+            for special_token in self.special_tokens:
                 byte_encoded_special_token = special_token.encode("utf-8")
                 self.special_tokens_dict[special_token] = self.vocab_index_dict[byte_encoded_special_token]
-                # print(byte_encoded_special_token, self.special_tokens_dict[special_token])
 
-        for pair, new_index in self.params.merges.items(): 
-            # self.vocab_merge_dict[pair[0]] = True
-            self.vocab_merge_dict[pair[1]] = True
 
         # encode_iterable
-        # self.encode_buffer = ""
         self.max_special_token_len = 0
-        if self.params.special_tokens is not None:
-            for special_token in self.params.special_tokens:
+        if self.special_tokens is not None:
+            for special_token in self.special_tokens:
                 self.max_special_token_len = len(special_token) if len(special_token) > self.max_special_token_len else 0
 
         # chunk_size
         self.chunk_size = 4096  # 4KB块
+
+    @classmethod
+    def from_files(cls, vocab_filepath, merges_filepath, special_tokens=None):  
+        # 反转 gpt2_bytes_to_unicode得到 gpt2_byte_decoder（Unicode 字符到字节的映射），用于后续将词表中的 Unicode 字符串还原为原始字节。
+        gpt2_byte_decoder = {v: k for k, v in gpt2_bytes_to_unicode().items()}
+        # vocab_path指向 GPT-2 格式的词表文件（如 vocab.json），内容为 JSON 对象，键是子词字符串（如 "hello"），值是对应的索引（如 123）
+        with open(vocab_filepath) as vocab_f:
+            gpt2_vocab = json.load(vocab_f)
+        gpt2_bpe_merges = []
+        with open(merges_filepath) as f:
+            for line in f:
+                cleaned_line = line.rstrip()
+                if cleaned_line and len(cleaned_line.split(" ")) == 2:
+                    gpt2_bpe_merges.append(tuple(cleaned_line.split(" ")))
+        # The GPT-2 tokenizer uses a remapped unicode encoding for bytes. Let's
+        # just return the original bytes, so we don't force students to use
+        # any particular encoding scheme.
+        # 最终 vocab的键是原子词索引，值是原始字节（如 123: b'low'）
+        vocab = {
+            gpt2_vocab_index: bytes([gpt2_byte_decoder[token] for token in gpt2_vocab_item])
+            for gpt2_vocab_item, gpt2_vocab_index in gpt2_vocab.items()
+        }
+        # If any of the special tokens don't exist in the vocab, append them to the vocab.
+        if special_tokens:
+            for special_token in special_tokens:
+                byte_encoded_special_token = special_token.encode("utf-8")
+                if byte_encoded_special_token not in set(vocab.values()):
+                    vocab[len(vocab)] = byte_encoded_special_token
+
+        # 将合并规则中的 Unicode 子词对还原为原始字节对，与词表的字节级数据对齐
+        merges = [
+            (
+                bytes([gpt2_byte_decoder[token] for token in merge_token_1]),
+                bytes([gpt2_byte_decoder[token] for token in merge_token_2]),
+            )
+            for merge_token_1, merge_token_2 in gpt2_bpe_merges
+        ]
+        return cls(vocab, merges, special_tokens)
  
 
     def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
         buffer = ""
         buffer_len = 0
         for text_chunk in iterable:
-            # print("688:", text_chunk, self.params.special_tokens[0], self.params.special_tokens[0] in text_chunk)
             buffer += text_chunk
             buffer_len += len(text_chunk)
 
             # special_token
             check_token_len = self.max_special_token_len
-            if self.params.special_tokens is not None and buffer_len >= check_token_len:
-                for special_token in self.params.special_tokens:
+            if self.special_tokens is not None and buffer_len >= check_token_len:
+                for special_token in self.special_tokens:
                     pos = buffer.find(special_token, -check_token_len, -1)
                     if pos > 0:
                         sub_buffer = buffer[:pos]
@@ -803,16 +842,8 @@ class BPETokenizer(Tokenizer):
     def encode(self, string: str) -> list[int]:
         # indices = list(map(int, string.encode("utf-8")))  # @inspect indices
         # 切割字符串
-        
-        split_content_list = extract_segments_before_special_tokens(string, self.params.special_tokens, filter=False)
-        pattern = GPT2_TOKENIZER_REGEX  # @inspect pattern
+        split_content_list = extract_segments_before_special_tokens(string, self.special_tokens, filter=False)
         segments = list()
-        # ignore
-        # for split_content in split_content_list:
-        #     if split_content in self.special_tokens_dict.keys():
-        #         segments.append(split_content)
-        #     else:
-        #         segments += regex.findall(pattern, split_content)  # @inspect segments 
         for split_content in split_content_list:
             if split_content in self.special_tokens_dict.keys() or ("\n" not in split_content): 
                 segments.append(split_content)
@@ -836,12 +867,6 @@ class BPETokenizer(Tokenizer):
                segments_size -= 1
             else:
                 i += 1
-        
-        # import pdb;pdb.set_trace()
-    
-
-        # print(segments)
-        # segments = split_content_list
 
         # str => utf-8 => int
         segment_indice_dict = dict()
@@ -851,7 +876,6 @@ class BPETokenizer(Tokenizer):
             else:
                 # segment_induce_dict[segment] = list(map(int, segment.encode("utf-8")))
                 segment_indice_dict[segment] = list()
-                # print("803:", len(segment_indice_dict.keys()))
                 # import pdb;pdb.set_trace()
                 for ch in segment.encode("utf-8"):
                     # unicode => byte
@@ -864,7 +888,7 @@ class BPETokenizer(Tokenizer):
                 continue
 
             indices = segment_indice_dict[segment]
-            for pair, new_index in self.params.merges.items():  # @inspect pair, @inspect new_index
+            for pair, new_index in self.merges_dict.items():  # @inspect pair, @inspect new_index
                 if len(indices) <= 1:
                     break
                  # 原地修改
@@ -896,7 +920,7 @@ class BPETokenizer(Tokenizer):
                     indices.append(cur_index)
 
                 # other
-                for pair, new_index in self.params.merges.items():  # @inspect pair, @inspect new_index
+                for pair, new_index in self.merges.items():  # @inspect pair, @inspect new_index
                     if len(indices) <= 1:
                         break
                     # 原地修改
@@ -908,44 +932,9 @@ class BPETokenizer(Tokenizer):
                 for idx in indices:
                     yield idx
 
-                # buffer = list()
-                # byte_seq = segment.encode("utf-8")
-                # for i in range(0, len(byte_seq), self.chunk_size):
-                #     chunk = byte_seq[i:i+self.chunk_size]
-                #     indices = list()
-                #     for ch in chunk:
-                #         cur_bytes = bytes([ch])
-                #         cur_index = self.vocab_index_dict[cur_bytes]
-                #         indices.append(cur_index)
-
-                #     # other
-                #     for pair, new_index in self.params.merges.items():  # @inspect pair, @inspect new_index
-                #         if len(indices) <= 1:
-                #             break
-                #         # 原地修改
-                #         if pair[0] not in indices or pair[1] not in indices:
-                #             continue
-                #         merge(indices, pair, new_index)
-
-                #     # 逐步产生索引
-                #     for idx in indices:
-                #         yield idx
-
-
-
-    # def _is_stable(self, token: int) -> bool:
-    #     """检查token是否稳定（不再参与合并）"""
-    #     # 检查token是否能与右侧token合并
-    #     for pair in self.params.merges.keys():
-    #         if pair[0] == token:
-    #             return False
-    #     return True
-
-
     def decode(self, indices: list[int]) -> str:
-        bytes_list = list(map(self.params.vocab.get, indices))  # @inspect bytes_list
+        bytes_list = list(map(self.vocab.get, indices))  # @inspect bytes_list
         string = b"".join(bytes_list).decode("utf-8", errors='ignore')  # @inspect string
-        # print(indices, string)
         return string
 
 def get_tokenizer(
@@ -968,16 +957,17 @@ def get_tokenizer(
     Returns:
         A BPE tokenizer that uses the provided vocab, merges, and special tokens.
     """
-    merges_dict: dict[tuple[int, int], int] = dict()
-    vocab_index_dict = {v: k for k, v in vocab.items()}
+    return BPETokenizer(vocab, merges, special_tokens)
+    # merges_dict: dict[tuple[int, int], int] = dict()
+    # vocab_index_dict = {v: k for k, v in vocab.items()}
 
-    for byte1, byte2 in merges:
-        find_index_byte1 = vocab_index_dict[byte1]
-        find_index_byte2 = vocab_index_dict[byte2]
-        find_index_merge = vocab_index_dict[byte1+byte2]
-        merges_dict[(find_index_byte1, find_index_byte2)] = find_index_merge
+    # for byte1, byte2 in merges:
+    #     find_index_byte1 = vocab_index_dict[byte1]
+    #     find_index_byte2 = vocab_index_dict[byte2]
+    #     find_index_merge = vocab_index_dict[byte1+byte2]
+    #     merges_dict[(find_index_byte1, find_index_byte2)] = find_index_merge
 
-    return BPETokenizer(BPETokenizerParams(vocab, merges_dict, special_tokens))
+    # return BPETokenizer(BPETokenizerParams(vocab, merges_dict, special_tokens))
     # raise NotImplementedError
 
 
@@ -996,7 +986,63 @@ def count_pretoken_frequency_by_chunks(input_path, boundaries, special_tokens):
             for segment in segments:
                 chunk_count_dict[segment] += 1
     return chunk_count_dict
+
+def calc_max_pair(segment_count_dict, segment_induce_dict, counts, vocab, last_max_pair=None, last_max_pair_new_index=None):
+    max_count = 0
+    max_pair = None
+    for segment in segment_count_dict.keys():
+        indices = segment_induce_dict[segment]
+
+        # max_pair
+        if last_max_pair is not None and \
+            last_max_pair[0] not in indices and \
+            last_max_pair[1] not in indices and \
+            last_max_pair_new_index not in indices:
+            continue
+
+        # 相邻合并对
+        indices_len = len(indices)
+        for jdx in range(indices_len - 1):
+            index1, index2 = indices[jdx], indices[jdx + 1]  
+            if last_max_pair is not None and \
+                index1 not in last_max_pair and \
+                index2 not in last_max_pair and \
+                index1 != last_max_pair_new_index and \
+                index2 != last_max_pair_new_index:
+                continue
+
+            # update index_segment_dict
+            cur_pair = (index1, index2)
+            counts[cur_pair] += segment_count_dict[segment]
+                
+    # max_pair
+    for cur_pair in counts.keys():
+        cur_count = counts[cur_pair]
+        if cur_count < max_count or cur_count == 0:
+            continue
+
+        if cur_count > max_count:
+            max_count = cur_count
+            max_pair = cur_pair
+            continue
+
+        # cur_vocab
+        index1, index2 = cur_pair[0], cur_pair[1] 
+        # print(max_pair, cur_count, max_count)
+        if (vocab[index1] > vocab[max_pair[0]]) or \
+            (vocab[index1] == vocab[max_pair[0]] and vocab[index2] > vocab[max_pair[1]]):
+            max_count = cur_count
+            max_pair = cur_pair
     
+    # reset count
+    for cur_pair in counts.keys():
+        if cur_pair[0] not in max_pair and \
+            cur_pair[1] not in max_pair:
+            continue
+        counts[cur_pair] = 0
+    
+    return max_pair
+
 def run_train_bpe(
     input_path: str | os.PathLike,
     vocab_size: int,
@@ -1079,72 +1125,59 @@ def run_train_bpe(
     cur_vocab_size = len(vocab.keys())
 
     while cur_vocab_size < vocab_size:
-        max_count = 0
-        # max_pair = None
-        # counts = defaultdict(int)
-        for segment in segment_count_dict.keys():
-            indices = segment_induce_dict[segment]
+        # max_count = 0
+        # for segment in segment_count_dict.keys():
+        #     indices = segment_induce_dict[segment]
 
-            # max_pair
-            if max_pair is not None and \
-               max_pair[0] not in indices and \
-               max_pair[1] not in indices and \
-               max_pair_new_index not in indices:
-                continue
+        #     # max_pair
+        #     if max_pair is not None and \
+        #        max_pair[0] not in indices and \
+        #        max_pair[1] not in indices and \
+        #        max_pair_new_index not in indices:
+        #         continue
 
-            # 相邻合并对
-            indices_len = len(indices)
-            for jdx in range(indices_len - 1):
-                index1, index2 = indices[jdx], indices[jdx + 1]  
-                if max_pair is not None and \
-                   index1 not in max_pair and \
-                   index2 not in max_pair and \
-                   index1 != max_pair_new_index and \
-                   index2 != max_pair_new_index:
-                    continue
+        #     # 相邻合并对
+        #     indices_len = len(indices)
+        #     for jdx in range(indices_len - 1):
+        #         index1, index2 = indices[jdx], indices[jdx + 1]  
+        #         if max_pair is not None and \
+        #            index1 not in max_pair and \
+        #            index2 not in max_pair and \
+        #            index1 != max_pair_new_index and \
+        #            index2 != max_pair_new_index:
+        #             continue
 
-                # update index_segment_dict
-                cur_pair = (index1, index2)
-                counts[cur_pair] += segment_count_dict[segment]
+        #         # update index_segment_dict
+        #         cur_pair = (index1, index2)
+        #         counts[cur_pair] += segment_count_dict[segment]
                 
-        # max_pair
-        for cur_pair in counts.keys():
-            cur_count = counts[cur_pair]
-            if cur_count < max_count:
-                continue
+        # # max_pair
+        # for cur_pair in counts.keys():
+        #     cur_count = counts[cur_pair]
+        #     if cur_count < max_count:
+        #         continue
 
-            if cur_count > max_count:
-                max_count = cur_count
-                max_pair = cur_pair
-                continue
+        #     if cur_count > max_count:
+        #         max_count = cur_count
+        #         max_pair = cur_pair
+        #         continue
 
-            # cur_vocab
-            index1, index2 = cur_pair[0], cur_pair[1] 
-            if (vocab[index1] > vocab[max_pair[0]]) or \
-               (vocab[index1] == vocab[max_pair[0]] and vocab[index2] > vocab[max_pair[1]]):
-                max_count = cur_count
-                max_pair = cur_pair
+        #     # cur_vocab
+        #     index1, index2 = cur_pair[0], cur_pair[1] 
+        #     if (vocab[index1] > vocab[max_pair[0]]) or \
+        #        (vocab[index1] == vocab[max_pair[0]] and vocab[index2] > vocab[max_pair[1]]):
+        #         max_count = cur_count
+        #         max_pair = cur_pair
 
-        # reset count
-        for cur_pair in counts.keys():
-            if cur_pair[0] not in max_pair and \
-               cur_pair[1] not in max_pair:
-                continue
-            counts[cur_pair] = 0
+        # # reset count
+        # for cur_pair in counts.keys():
+        #     if cur_pair[0] not in max_pair and \
+        #        cur_pair[1] not in max_pair:
+        #         continue
+        #     counts[cur_pair] = 0
 
-
-        # 排序计数并获取最大值
-        # sorted_counts = sorted(
-        #     counts.items(),
-        #     key=lambda item: (
-        #         item[1],  # 按计数降序
-        #         vocab[item[0][0]],  # 按第一个词汇ID降序
-        #         vocab[item[0][1]]   # 按第二个词汇ID降序
-        #     ),
-        #     reverse=True,
-        # )
-        # max_pair, max_count = sorted_counts[0]
-        # max_pair_vocab = (vocab[max_pair[0]], vocab[max_pair[1]])
+        max_pair = calc_max_pair(segment_count_dict, segment_induce_dict, counts, vocab, \
+                                 last_max_pair=max_pair, last_max_pair_new_index=max_pair_new_index)
         
         # update merges
         max_pair_vocab = (vocab[max_pair[0]], vocab[max_pair[1]])
