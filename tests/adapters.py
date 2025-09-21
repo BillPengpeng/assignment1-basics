@@ -16,7 +16,7 @@ from dataclasses import dataclass
 # 20250918 add partial, multiprocessing
 from functools import partial
 import multiprocessing
-from multiprocessing.pool import Pool
+from multiprocessing import Pool, cpu_count
 from collections.abc import Iterable
 from typing import IO, Any, BinaryIO
 
@@ -682,7 +682,7 @@ def extract_segments_before_special_tokens(input_str: str, special_tokens: list[
 def find_chunk_boundaries(
     file: BinaryIO,
     desired_num_chunks: int,
-    split_special_token: bytes,
+    split_special_token: bytes,  
 ) -> list[int]:
     """
     Chunk the file into parts that can be counted independently.
@@ -981,6 +981,22 @@ def get_tokenizer(
     # raise NotImplementedError
 
 
+def count_pretoken_frequency_by_chunks(input_path, boundaries, special_tokens):
+    chunk_count_dict = defaultdict(int)
+    with open(input_path, "rb") as f:
+        for start, end in zip(boundaries[:-1], boundaries[1:]):
+            f.seek(start)
+            content = f.read(end - start).decode("utf-8", errors="ignore")
+            split_content_list = extract_segments_before_special_tokens(content, special_tokens)
+            # chunk_count_dict
+            pattern = GPT2_TOKENIZER_REGEX  # @inspect pattern
+            segments = list()
+            for split_content in split_content_list:
+                segments += regex.findall(pattern, split_content)  # @inspect segments
+            for segment in segments:
+                chunk_count_dict[segment] += 1
+    return chunk_count_dict
+    
 def run_train_bpe(
     input_path: str | os.PathLike,
     vocab_size: int,
@@ -1019,39 +1035,40 @@ def run_train_bpe(
         idx = len(vocab.keys())
         vocab[idx] = special_token.encode("utf-8")
         special_token_vocab_list.append(vocab[idx])
-    # 疑问?
-    # for x in range(256):
-    #     idx = len(vocab.keys())
-    #     vocab[idx] = bytes([x])
-
-
-    # 读取输入文件
-    with open(input_path, "r") as f:
-        content = f.read()
 
     # 切割字符串
-    split_content_list = extract_segments_before_special_tokens(content, special_tokens)
-    # import pdb;pdb.set_trace()
-    pattern = GPT2_TOKENIZER_REGEX  # @inspect pattern
-    segments = list()
-    for split_content in split_content_list:
-        segments += regex.findall(pattern, split_content)  # @inspect segments
-    # segments = regex.findall(pattern, content)  # @inspect segments
-    # special_pattern = "|".join(regex.escape(token) for token in special_tokens)
-    # import pdb;pdb.set_trace()
-
-    # 循环合并
-    # map(int, bytes)会将 bytes对象中的每个字节值（如 0x61）转换为对应的整数（如 97），并生成一个包含这些整数的迭代器
-    # indices = list(map(int, "ab".encode("utf-8")))→ [97, 98]。
-    # indices = list(map(int, "你好".encode("utf-8")))→ [228, 189, 160, 229, 165, 189]。
-    # indices = list(map(int, content.encode("utf-8"))) 
-    # text("The GPT-2 paper used word-based tokenization to break up the text into inital segments and run the original BPE algorithm on each segment.")
+    start_time = time.time()
     segment_count_dict = defaultdict(int)
-    for segment in segments:
-        segment_count_dict[segment] += 1
     segment_induce_dict = dict()
+    subproc_cnt = cpu_count() * 2 #
+    chunk_per_subproc = 5 # 100
+    with open(input_path, "rb") as f:
+        # 获取分块边界
+        boundaries = find_chunk_boundaries(
+            f, subproc_cnt * chunk_per_subproc, "<|endoftext|>".encode("utf-8")
+        )
+
+    with Pool() as pool:
+        results = pool.starmap(
+            count_pretoken_frequency_by_chunks,
+            [
+                (
+                    input_path,
+                    boundaries[i * chunk_per_subproc : (i + 1) * chunk_per_subproc + 1],
+                    special_tokens
+                )
+                for i in range(subproc_cnt)
+            ],
+        )
+    for res in results:
+        for k,v in res.items():
+            segment_count_dict[k] += v
+    end_time = time.time()
+    print("count_pretoken_frequency_by_chunks:", end_time - start_time)
+
     for segment in segment_count_dict.keys():
-        segment_induce_dict[segment] = list(map(int, segment.encode("utf-8")))
+        segment_induce_dict[segment] = list(map(int, segment.encode("utf-8")))    
+    # import pdb;pdb.set_trace()
 
     # max_pair
     max_pair = None
