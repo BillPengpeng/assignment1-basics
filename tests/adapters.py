@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import heapq
 import os
 import regex
 import time, json
@@ -990,6 +991,8 @@ def count_pretoken_frequency_by_chunks(input_path, boundaries, special_tokens):
 def calc_max_pair(segment_count_dict, segment_induce_dict, counts, vocab, last_max_pair=None, last_max_pair_new_index=None):
     max_count = 0
     max_pair = None
+    # print("segment_count_dict.keys():", len(segment_count_dict.keys()))
+    # time1 = time.time()
     for segment in segment_count_dict.keys():
         indices = segment_induce_dict[segment]
 
@@ -1014,8 +1017,11 @@ def calc_max_pair(segment_count_dict, segment_induce_dict, counts, vocab, last_m
             # update index_segment_dict
             cur_pair = (index1, index2)
             counts[cur_pair] += segment_count_dict[segment]
+    # time2 = time.time()
+    # print("calc_max_pair 1:", time2 - time1)
                 
     # max_pair
+    # print("counts.keys():", len(counts.keys()))
     for cur_pair in counts.keys():
         cur_count = counts[cur_pair]
         if cur_count < max_count or cur_count == 0:
@@ -1033,6 +1039,9 @@ def calc_max_pair(segment_count_dict, segment_induce_dict, counts, vocab, last_m
             (vocab[index1] == vocab[max_pair[0]] and vocab[index2] > vocab[max_pair[1]]):
             max_count = cur_count
             max_pair = cur_pair
+
+    # time3 = time.time()
+    # print("calc_max_pair 2:", time3 - time2)
     
     # reset count
     for cur_pair in counts.keys():
@@ -1040,8 +1049,37 @@ def calc_max_pair(segment_count_dict, segment_induce_dict, counts, vocab, last_m
             cur_pair[1] not in max_pair:
             continue
         counts[cur_pair] = 0
+
+    # time4 = time.time()
+    # print("calc_max_pair 3:", time4 - time3)
     
     return max_pair
+
+class PairItem:
+    def __init__(self, count, vocab1, vocab2, original_pair):
+        self.count = count
+        self.vocab1 = vocab1 # bytes
+        self.vocab2 = vocab2 # bytes
+        self.original_pair = original_pair
+
+    # 定义比较规则，用于堆排序
+    # 我们需要使【更大】的 PairItem 在比较中【更小】（因为是最小堆）
+    def __lt__(self, other):
+        # 比较规则与你的原始逻辑完全一致：
+        if self.count != other.count:
+            # 计数大的更“小”（因为我们要最大堆，计数大的应该在堆顶）
+            return self.count > other.count
+        # 计数相同，比较第一个词汇
+        if self.vocab1 != other.vocab1:
+            # 词汇字节串大的更“小”
+            return self.vocab1 > other.vocab1
+        # 前两个都相同，比较第二个词汇
+        return self.vocab2 > other.vocab2
+
+    def __eq__(self, other):
+        return (self.count == other.count and 
+                self.vocab1 == other.vocab1 and 
+                self.vocab2 == other.vocab2)
 
 def run_train_bpe(
     input_path: str | os.PathLike,
@@ -1087,13 +1125,17 @@ def run_train_bpe(
     segment_count_dict = defaultdict(int)
     segment_induce_dict = dict()
     subproc_cnt = cpu_count() * 2 #
+    print("subproc_cnt:", subproc_cnt)
     chunk_per_subproc = 5 # 100
     with open(input_path, "rb") as f:
         # 获取分块边界
         boundaries = find_chunk_boundaries(
             f, subproc_cnt * chunk_per_subproc, "<|endoftext|>".encode("utf-8")
         )
+    end_time = time.time()
+    print("find_chunk_boundaries:", end_time - start_time)
 
+    start_time = time.time()
     with Pool() as pool:
         results = pool.starmap(
             count_pretoken_frequency_by_chunks,
@@ -1112,10 +1154,12 @@ def run_train_bpe(
     end_time = time.time()
     print("count_pretoken_frequency_by_chunks:", end_time - start_time)
 
+      
     for segment in segment_count_dict.keys():
         segment_induce_dict[segment] = list(map(int, segment.encode("utf-8")))    
     # import pdb;pdb.set_trace()
 
+    '''
     # max_pair
     max_pair = None
     max_pair_vocab = [0, 0]
@@ -1125,65 +1169,16 @@ def run_train_bpe(
     cur_vocab_size = len(vocab.keys())
 
     while cur_vocab_size < vocab_size:
-        # max_count = 0
-        # for segment in segment_count_dict.keys():
-        #     indices = segment_induce_dict[segment]
-
-        #     # max_pair
-        #     if max_pair is not None and \
-        #        max_pair[0] not in indices and \
-        #        max_pair[1] not in indices and \
-        #        max_pair_new_index not in indices:
-        #         continue
-
-        #     # 相邻合并对
-        #     indices_len = len(indices)
-        #     for jdx in range(indices_len - 1):
-        #         index1, index2 = indices[jdx], indices[jdx + 1]  
-        #         if max_pair is not None and \
-        #            index1 not in max_pair and \
-        #            index2 not in max_pair and \
-        #            index1 != max_pair_new_index and \
-        #            index2 != max_pair_new_index:
-        #             continue
-
-        #         # update index_segment_dict
-        #         cur_pair = (index1, index2)
-        #         counts[cur_pair] += segment_count_dict[segment]
-                
-        # # max_pair
-        # for cur_pair in counts.keys():
-        #     cur_count = counts[cur_pair]
-        #     if cur_count < max_count:
-        #         continue
-
-        #     if cur_count > max_count:
-        #         max_count = cur_count
-        #         max_pair = cur_pair
-        #         continue
-
-        #     # cur_vocab
-        #     index1, index2 = cur_pair[0], cur_pair[1] 
-        #     if (vocab[index1] > vocab[max_pair[0]]) or \
-        #        (vocab[index1] == vocab[max_pair[0]] and vocab[index2] > vocab[max_pair[1]]):
-        #         max_count = cur_count
-        #         max_pair = cur_pair
-
-        # # reset count
-        # for cur_pair in counts.keys():
-        #     if cur_pair[0] not in max_pair and \
-        #        cur_pair[1] not in max_pair:
-        #         continue
-        #     counts[cur_pair] = 0
-
+        # time1 = time.time()
         max_pair = calc_max_pair(segment_count_dict, segment_induce_dict, counts, vocab, \
                                  last_max_pair=max_pair, last_max_pair_new_index=max_pair_new_index)
         
         # update merges
         max_pair_vocab = (vocab[max_pair[0]], vocab[max_pair[1]])
         merges.append(max_pair_vocab)
-        # import pdb;pdb.set_trace()
-        # print(max_pair_vocab, max_count, max_pair)
+
+        # time2 = time.time()
+        # print("cur_vocab_size < vocab_size 1:", time2 - time1)
 
         # Merge that pair.
         max_pair_new_index = cur_vocab_size
@@ -1196,8 +1191,170 @@ def run_train_bpe(
                 continue
             indices_len = merge(indices, max_pair, max_pair_new_index) 
 
+        # time3 = time.time()
+        # print("cur_vocab_size < vocab_size 2:", time3 - time2)
+
         # update vocab_size
         cur_vocab_size += 1
+        # print("cur_vocab_size:", cur_vocab_size)
+    '''
+
+    ## init dict
+    token_idx = 1
+    token_idx_induce_dict = defaultdict(int)
+    token_idx_count_dict  = defaultdict(int)
+    induce_pre = defaultdict(int)
+    induce_next = defaultdict(int)
+    pair_count = defaultdict(int)
+    pair_pos = defaultdict(set)
+    start_time = time.time()
+    for segment, segment_count in segment_count_dict.items():
+        cur_induce = list(map(int, segment.encode("utf-8"))) 
+        segment_induce_dict[segment] = cur_induce
+        cur_induce_len = len(cur_induce)
+        # for segment_idx in range(segment_count):
+        for idx in range(cur_induce_len):
+            token_idx_induce_dict[token_idx] = cur_induce[idx]
+            token_idx_count_dict[token_idx] = segment_count
+            if idx < cur_induce_len - 1:
+                cur_pos = token_idx 
+                cur_pair = (cur_induce[idx], cur_induce[idx+1])
+                # pair_count[cur_pair] += 1
+                pair_pos[cur_pair].add(cur_pos)
+                pair_count[cur_pair] += segment_count
+            
+            induce_pre[token_idx] = 0 if idx == 0 else token_idx - 1
+            induce_next[token_idx] = 0 if idx == cur_induce_len - 1 else token_idx + 1
+            token_idx += 1
+    end_time = time.time()
+    # print("init dict:", end_time - start_time)
+
+    ## heapq
+    heap = []
+    for cur_pair, cur_count in pair_count.items():
+        index1, index2 = cur_pair
+        # 构建堆的元素元组。
+        # 元组结构决定了排序优先级：
+        # 第一项: -cur_count (将计数取负，使得计数大的在堆顶)
+        # 第二项: -vocab[index1], -vocab[index2] (将词汇取负，实现降序字典序比较)
+        # 第三项: cur_pair (存储原始数据，用于最后返回)
+        # heap_item = (-cur_count, -vocab[index1], -vocab[index2], cur_pair)
+        heap_item = PairItem(cur_count, vocab[index1], vocab[index2], cur_pair)
+        heapq.heappush(heap, heap_item)
+
+    ## merge
+    cur_vocab_size = len(vocab.keys())
+    new_token_idx = token_idx
+    while cur_vocab_size < vocab_size and heap:
+        # calc max_pair
+        # max_pair = None
+        # max_count = 0
+        # for cur_pair in pair_count.keys():
+        #     cur_count = pair_count[cur_pair]
+        #     if cur_count < max_count or cur_count == 0:
+        #         continue
+
+        #     if cur_count > max_count:
+        #         max_count = cur_count
+        #         max_pair = cur_pair
+        #         continue
+
+        #     # cur_vocab
+        #     index1, index2 = cur_pair[0], cur_pair[1]
+        #     max_index1, max_index2 = max_pair[0], max_pair[1]
+        #     if (vocab[index1] > vocab[max_index1]) or \
+        #         (vocab[index1] == vocab[max_index1] and vocab[index2] > vocab[max_index2]):
+        #         max_count = cur_count
+        #         max_pair = cur_pair
+        # if 0 == max_count:
+        #     break
+        # neg_count, neg_vocab1, neg_vocab2, max_pair = heapq.heappop(heap) 
+        best_item = heapq.heappop(heap)
+        max_pair = best_item.original_pair
+        max_count = best_item.count
+        # 检查这个 pair 是否仍然有效
+        if max_pair not in pair_count.keys() or \
+           pair_count[max_pair] != max_count:
+            continue 
+        
+        # update merges
+        max_index1, max_index2 = max_pair[0], max_pair[1]
+        max_pair_vocab = (vocab[max_index1], vocab[max_index2])
+        merges.append(max_pair_vocab)
+        max_pair_new_index = cur_vocab_size
+        token_idx_induce_dict[new_token_idx] = max_pair_new_index
+        vocab[max_pair_new_index] = max_pair_vocab[0] + max_pair_vocab[1]
+
+        # update dict
+        new_pair_set = set()
+        pos_lst = list(pair_pos.get(max_pair, set()))
+        for cur_pos in sorted(pos_lst):
+            pre_token_idx = induce_pre[cur_pos]
+            next_token_idx = induce_next[cur_pos]
+            next_next_token_idx = induce_next[next_token_idx] if next_token_idx > 0 else 0
+            if next_token_idx is None or \
+               token_idx_induce_dict[cur_pos] != max_index1 or \
+               token_idx_induce_dict[next_token_idx] != max_index2:
+                continue
+
+            if pre_token_idx > 0:
+                cur_old_pair = (token_idx_induce_dict[pre_token_idx], max_index1)
+                cur_new_pair = (token_idx_induce_dict[pre_token_idx], max_pair_new_index)
+                # pair_count[cur_old_pair] -= 1
+                assert pair_count[cur_old_pair] > 0
+                pair_count[cur_old_pair] -= token_idx_count_dict[pre_token_idx]
+                pair_pos[cur_old_pair].remove(pre_token_idx)
+
+                pair_count[cur_new_pair] += token_idx_count_dict[pre_token_idx]
+                pair_pos[cur_new_pair].add(pre_token_idx)
+                induce_pre[new_token_idx] = pre_token_idx
+                induce_next[pre_token_idx] = new_token_idx
+                token_idx_count_dict[new_token_idx] = token_idx_count_dict[pre_token_idx]
+
+                # update new_pair_set
+                new_pair_set.add(cur_old_pair)
+                new_pair_set.add(cur_new_pair)
+
+            if next_next_token_idx > 0:
+                cur_old_pair = (max_index2,         token_idx_induce_dict[next_next_token_idx])
+                cur_new_pair = (max_pair_new_index, token_idx_induce_dict[next_next_token_idx])
+                # pair_count[cur_old_pair] -= 1
+                assert pair_count[cur_old_pair] > 0
+                pair_count[cur_old_pair] -= token_idx_count_dict[next_next_token_idx]
+                pair_pos[cur_old_pair].remove(next_token_idx)
+
+                # pair_count[cur_new_pair] += 1
+                pair_count[cur_new_pair] += token_idx_count_dict[next_next_token_idx]
+                pair_pos[cur_new_pair].add(new_token_idx)
+                induce_next[new_token_idx] = next_next_token_idx
+                induce_pre[next_next_token_idx] = new_token_idx
+                token_idx_count_dict[new_token_idx] = token_idx_count_dict[next_next_token_idx]
+
+                # update new_pair_set
+                new_pair_set.add(cur_old_pair)
+                new_pair_set.add(cur_new_pair)
+
+            # update token_idx_induce_dict
+            token_idx_induce_dict[next_token_idx] = 0
+            induce_pre[next_token_idx] = 0
+            induce_next[next_token_idx] = 0
+            token_idx_induce_dict[new_token_idx] = max_pair_new_index
+
+            # update new_token_idx
+            new_token_idx += 1
+
+        # update heap
+        for cur_pair in new_pair_set:
+            # heap_item = (-pair_count[cur_pair], -vocab[cur_pair[0]], -vocab[cur_pair[1]], cur_pair)
+            heap_item = PairItem(pair_count[cur_pair], vocab[cur_pair[0]], vocab[cur_pair[1]], cur_pair)
+            heapq.heappush(heap, heap_item)
+
+
+        # update vocab_size
+        pair_count[max_pair] = 0
+        del pair_count[max_pair]
+        cur_vocab_size += 1
+        if cur_vocab_size % 1000 == 0:
+            print(cur_vocab_size)
 
     return vocab, merges
-    # raise NotImplementedError

@@ -80,8 +80,8 @@ def test_train_bpe_owe():
     merged with other tokens.
     """
     start_time = time.time()
-    input_path = DATA_PATH / "owt_valid.txt"
-    # input_path = DATA_PATH / "owt_train.txt"
+    # input_path = DATA_PATH / "owt_valid.txt"
+    input_path = DATA_PATH / "owt_train.txt"
     print("process:", input_path)
     # input_path = FIXTURES_PATH / "tinystories_sample_5M.txt"
     vocab, merges = run_train_bpe(
@@ -103,7 +103,6 @@ def test_train_bpe_owe():
     #     },
     # )
     end_time = time.time()
-    # 20250921 owt_valid.txt 耗时 85.79178786277771  owt_train.txt 耗时 571.4011189937592
     print("test_train_bpe_owe:", end_time - start_time)
 
     output_vocab_json = DATA_PATH / "owt-vacab.json"
@@ -250,7 +249,7 @@ if __name__ == "__main__":
     # p = pstats.Stats('profile_results')
     # p.sort_stats('cumulative').print_stats(10)  # 按累计时间排序，打印前10行
     # test_train_bpe_TinyStories()
-    # test_train_bpe_owe()
+    test_train_bpe_owe()
     # test_bpe_tokenize_TinyStories_sample()
-    test_bpe_tokenize_TinyStories_proc()
+    # test_bpe_tokenize_TinyStories_proc() 
 
