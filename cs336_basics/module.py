@@ -26,3 +26,22 @@ class embedding(nn.Module):
     def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
         y = self.weight[token_ids]
         return y
+
+class rmsnorm(nn.Module): 
+    def __init__(self, d_model: int, eps: float = 1e-5,
+                 device: torch.device | None=None, 
+                 dtype: torch.dtype| None=None):
+        super().__init__()
+        self.eps = eps
+        # 增益参数 g 被定义为形状为 (d_model,) 的可学习参数
+        self.g = nn.Parameter(torch.ones(d_model)) # 初始化为1
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        ori_dtype = x.dtype
+        print("41:", x.type)
+        input = x.type(torch.float32)
+        print("43:", x.type, input.type)
+        rms = torch.sqrt(torch.mean(input.pow(2), dim=-1, keepdim=True) + self.eps)
+        y = input / rms * self.g
+        y = y.type(ori_dtype)
+        return y

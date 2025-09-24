@@ -28,7 +28,7 @@ from tests.common import gpt2_bytes_to_unicode
 
 # 20250923
 from einops import rearrange,einsum
-from cs336_basics.module import linear, embedding
+from cs336_basics.module import linear, embedding, rmsnorm
 
 def run_linear(
     d_in: int,
@@ -402,7 +402,12 @@ def run_rmsnorm(
         Float[Tensor,"... d_model"]: Tensor of with the same shape as `in_features` with the output of running
         RMSNorm of the `in_features`.
     """
-    raise NotImplementedError
+    model = rmsnorm(d_model)
+    with torch.no_grad():
+        model.g.copy_(weights)
+    y = model(in_features)
+    return y
+
 
 
 def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
