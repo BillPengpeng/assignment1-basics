@@ -37,11 +37,17 @@ class rmsnorm(nn.Module):
         self.g = nn.Parameter(torch.ones(d_model)) # 初始化为1
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        ori_dtype = x.dtype
-        print("41:", x.type)
+        dtype = x.dtype
         input = x.type(torch.float32)
-        print("43:", x.type, input.type)
         rms = torch.sqrt(torch.mean(input.pow(2), dim=-1, keepdim=True) + self.eps)
         y = input / rms * self.g
-        y = y.type(ori_dtype)
+        y = y.type(dtype)
+        return y
+
+class silu(nn.Module): 
+    def __init__(self):
+        super().__init__()
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        y = x * torch.sigmoid(x)
         return y
