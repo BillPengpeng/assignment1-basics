@@ -26,6 +26,10 @@ from torch import Tensor
 # 20250921
 from tests.common import gpt2_bytes_to_unicode
 
+# 20250923
+from einops import rearrange,einsum
+from cs336_basics.module import linear, embedding
+
 def run_linear(
     d_in: int,
     d_out: int,
@@ -44,9 +48,11 @@ def run_linear(
     Returns:
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
-
-    raise NotImplementedError
-
+    model = linear(d_in, d_out)
+    with torch.no_grad():
+        model.weight.copy_(weights)
+    y = model(in_features)
+    return y
 
 def run_embedding(
     vocab_size: int,
@@ -66,9 +72,11 @@ def run_embedding(
     Returns:
         Float[Tensor, "... d_model"]: Batch of embeddings returned by your Embedding layer.
     """
-
-    raise NotImplementedError
-
+    model = embedding(vocab_size, d_model)
+    with torch.no_grad():
+        model.weight.copy_(weights)
+    y = model(token_ids)
+    return y
 
 def run_swiglu(
     d_model: int,

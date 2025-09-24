@@ -212,10 +212,10 @@ def test_bpe_tokenize_TinyStories_proc():
     # TinyStoriesV2-GPT4-valid.txt
     sample_len = 0
     encoded_ids_len = 0
-    # input_path = DATA_PATH / "TinyStoriesV2-GPT4-valid.txt"
-    # output_path = DATA_PATH / "TinyStoriesV2-GPT4-valid-encoded.npy"
-    input_path = DATA_PATH / "TinyStoriesV2-GPT4-train.txt"
-    output_path = DATA_PATH / "TinyStoriesV2-GPT4-train-encoded.npy"
+    input_path = DATA_PATH / "TinyStoriesV2-GPT4-valid.txt"
+    output_path = DATA_PATH / "TinyStoriesV2-GPT4-valid-encoded.npy"
+    # input_path = DATA_PATH / "TinyStoriesV2-GPT4-train.txt"
+    # output_path = DATA_PATH / "TinyStoriesV2-GPT4-train-encoded.npy"
 
     # result_list
     result_list = list()
@@ -249,7 +249,7 @@ if __name__ == "__main__":
     # p = pstats.Stats('profile_results')
     # p.sort_stats('cumulative').print_stats(10)  # 按累计时间排序，打印前10行
     # test_train_bpe_TinyStories()
-    test_train_bpe_owe()
+    # test_train_bpe_owe()
     # test_bpe_tokenize_TinyStories_sample()
-    # test_bpe_tokenize_TinyStories_proc() 
+    test_bpe_tokenize_TinyStories_proc() 
 
