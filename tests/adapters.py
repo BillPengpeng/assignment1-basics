@@ -28,7 +28,7 @@ from tests.common import gpt2_bytes_to_unicode
 
 # 20250923
 from einops import rearrange,einsum
-from cs336_basics.module import linear, embedding, rmsnorm, silu
+from cs336_basics.module import linear, embedding, rmsnorm, silu, swiglu
 
 def run_linear(
     d_in: int,
@@ -107,7 +107,14 @@ def run_swiglu(
     # swiglu.w1.weight.data = w1_weight
     # swiglu.w2.weight.data = w2_weight
     # swiglu.w3.weight.data = w3_weight
-    raise NotImplementedError
+    # raise NotImplementedError
+    model = swiglu(d_model, d_ff)
+    with torch.no_grad():
+        model.w1.copy_(w1_weight)
+        model.w2.copy_(w2_weight)
+        model.w3.copy_(w3_weight)
+    y = model(in_features)
+    return y
 
 
 def run_scaled_dot_product_attention(

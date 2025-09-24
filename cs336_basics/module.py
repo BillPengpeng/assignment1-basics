@@ -51,3 +51,25 @@ class silu(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         y = x * torch.sigmoid(x)
         return y
+
+class swiglu(nn.Module): 
+    def __init__(self, d_model: int, d_ff: int,
+                 device: torch.device | None=None, 
+                 dtype: torch.dtype| None=None):
+        super().__init__()
+        self.act = silu()
+        self.w1 = nn.Parameter(torch.empty(d_ff, d_model, dtype=dtype, device=device))
+        self.w3 = nn.Parameter(torch.empty(d_ff, d_model, dtype=dtype, device=device))
+        self.w2 = nn.Parameter(torch.empty(d_model, d_ff, dtype=dtype, device=device))
+        std = (2.0 / (d_model + d_ff)) ** 0.5
+        nn.init.trunc_normal_(self.w1, mean=0, std=std, a=-3*std, b=3*std)
+        nn.init.trunc_normal_(self.w2, mean=0, std=std, a=-3*std, b=3*std)
+        nn.init.trunc_normal_(self.w3, mean=0, std=std, a=-3*std, b=3*std)
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # print(x.shape, self.w1.shape, self.w2.shape)
+        x1 = einsum(self.w1, x, "d_ff d_model, ... d_model -> ... d_ff")
+        x3 = einsum(self.w3, x, "d_ff d_model, ... d_model -> ... d_ff")
+        y = self.act(x1) * x3
+        y = einsum(self.w2, y, "d_model d_ff, ... d_ff -> ... d_model")
+        return y
