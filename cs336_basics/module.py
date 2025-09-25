@@ -111,8 +111,9 @@ class rope(nn.Module):
 
         # 3. 根据当前序列位置，获取对应的cos和sin值
         # cos_vals 形状 (seq_len, d_model//2)
-        cos = self.cos_cached[token_positions]
-        sin = self.sin_cached[token_positions]
+        # 20250925 add torch.squeeze
+        cos = torch.squeeze(self.cos_cached[token_positions])
+        sin = torch.squeeze(self.sin_cached[token_positions])
 
         # 4. 应用旋转公式（这步就是在“填充”和计算！）
         x1_rotated = einsum(x1, cos, "... seq_len d_model_div2, seq_len d_model_div2 -> ... seq_len d_model_div2") - \
@@ -154,3 +155,47 @@ def scaled_dot_product_attention_func(Q: torch.Tensor, K: torch.Tensor, V: torch
     y = softmax_func(QK / math.sqrt(d_k), dim=-1)
     y = einsum(y, V, "... queries keys, ... keys d_v -> ... queries d_v") 
     return y
+
+class causal_multihead_self_attention(nn.Module):
+    def __init__(self, d_model: int, num_heads: int,
+                 max_seq_len: int | None=None,  
+                 theta: float | None=None, 
+                 device: torch.device | None=None, 
+                 dtype: torch.dtype| None=None):
+        super().__init__()
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.head_dim = d_model // num_heads
+        self.qkv_weight = nn.Parameter(torch.empty(3 * d_model, d_model, dtype=dtype, device=device))
+        self.o_weight = nn.Parameter(torch.empty(self.d_model, self.d_model, dtype=dtype, device=device))
+        std = (2.0 / (4 * self.head_dim)) ** 0.5
+        nn.init.trunc_normal_(self.qkv_weight, mean=0, std=std, a=-3*std, b=3*std)
+        std = (2.0 / (2 * self.d_model)) ** 0.5
+        nn.init.trunc_normal_(self.o_weight, mean=0, std=std, a=-3*std, b=3*std)
+
+        # rope
+        if max_seq_len is not None and theta is not None:
+            self.rope = rope(theta, self.head_dim, max_seq_len, device)
+        else:
+            self.rope = None
+
+    def create_causal_mask(self, seq_len: int, device: torch.device = None):
+        row_indices = torch.arange(seq_len, device=device)
+        col_indices = torch.arange(seq_len, device=device)
+        mask = row_indices.unsqueeze(1) >= col_indices
+        return mask
+
+
+    def forward(self, in_features: torch.Tensor,
+                token_positions:torch.Tensor | None=None) -> torch.Tensor:
+        seq_len = in_features.shape[-2]
+        qkv = einsum(self.qkv_weight, in_features, "three_out_dim out_dim, ... seq_len out_dim -> ... seq_len three_out_dim")
+        q, k, v = rearrange(qkv, "... seq_len (three num_heads head_dim) -> three ... num_heads seq_len head_dim", three=3, num_heads=self.num_heads)
+        if self.rope is not None:
+            q = self.rope(q, token_positions)
+            k = self.rope(k, token_positions)
+        mask = self.create_causal_mask(seq_len, in_features.device)
+        out = scaled_dot_product_attention_func(q, k, v, mask)
+        out = rearrange(out, "... num_heads seq_len head_dim -> ... seq_len (num_heads head_dim)")
+        out = einsum(self.o_weight, out, "out_dim in_dim, ... seq_len in_dim -> ... seq_len out_dim")
+        return out

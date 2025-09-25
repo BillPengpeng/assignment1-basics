@@ -30,6 +30,7 @@ from tests.common import gpt2_bytes_to_unicode
 from einops import rearrange,einsum
 from cs336_basics.module import linear, embedding, rmsnorm, silu, swiglu, rope
 from cs336_basics.module import softmax, softmax_func, scaled_dot_product_attention_func
+from cs336_basics.module import causal_multihead_self_attention
 
 def run_linear(
     d_in: int,
@@ -170,7 +171,14 @@ def run_multihead_self_attention(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    model = causal_multihead_self_attention(d_model, num_heads)
+    with torch.no_grad():
+        model.qkv_weight[:d_model,].copy_(q_proj_weight)
+        model.qkv_weight[d_model:2*d_model,].copy_(k_proj_weight)
+        model.qkv_weight[2*d_model:3*d_model,].copy_(v_proj_weight)
+        model.o_weight.copy_(o_proj_weight)
+    y = model(in_features)
+    return y
 
 
 def run_multihead_self_attention_with_rope(
@@ -210,7 +218,14 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    model = causal_multihead_self_attention(d_model, num_heads, max_seq_len=max_seq_len, theta=theta)
+    with torch.no_grad():
+        model.qkv_weight[:d_model,].copy_(q_proj_weight)
+        model.qkv_weight[d_model:2*d_model,].copy_(k_proj_weight)
+        model.qkv_weight[2*d_model:3*d_model,].copy_(v_proj_weight)
+        model.o_weight.copy_(o_proj_weight)
+    y = model(in_features, token_positions=token_positions)
+    return y
 
 
 def run_rope(
