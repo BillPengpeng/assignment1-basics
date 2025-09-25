@@ -35,7 +35,7 @@ class rmsnorm(nn.Module):
         super().__init__()
         self.eps = eps
         # 增益参数 g 被定义为形状为 (d_model,) 的可学习参数
-        self.g = nn.Parameter(torch.ones(d_model)) # 初始化为1
+        self.g = nn.Parameter(torch.ones(d_model, dtype=dtype, device=device)) # 初始化为1
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         dtype = x.dtype
@@ -86,51 +86,75 @@ class rope(nn.Module):
 
         # 关键：初始化一个None缓冲区，persistent=False
         # 我们不在这里计算，而是延迟到第一次前向传播时计算（更高效）
+        self.register_buffer("inv_freq", None, persistent=False)
         self.register_buffer("freqs", None, persistent=False)
         self.register_buffer("cos_cached", None, persistent=False)
         self.register_buffer("sin_cached", None, persistent=False)
 
         # 计算
         t = torch.arange(max_seq_len, device=device)
-        freps = 1.0 / (theta**(torch.arange(start=0, end=d_k, step=2, device=device) / d_k))
-        self.freqs = einsum(t, freps, "t_len, freps_len -> t_len freps_len")
+        self.inv_freq = 1.0 / (theta**(torch.arange(start=0, end=d_k, step=2, device=device) / d_k))
+        # self.freqs = einsum(t, freq, "t_len, freps_len -> t_len freps_len")
+        self.freqs = torch.outer(t, self.inv_freq)
+        # import pdb;pdb.set_trace()
         self.cos_cached = self.freqs.cos()
         self.sin_cached = self.freqs.sin()
 
 
-    def forward(self, x:torch.Tensor, token_positions:torch.Tensor)->torch.Tensor:
-        # # 1. 将输入x的最后一维拆分为二维向量对
-        # # [..., d_model] -> [..., d_model//2, 2]
-        # # x_shaped = x.view(*x.shape[:-1], -1, 2)
-        # x_shaped = rearrange(x, '... (d_model_div2 two) -> ... d_model_div2 two', two=2)
+    def forward(self, x:torch.Tensor, token_positions:torch.Tensor, conj:bool=False)->torch.Tensor:
+        # # # 2. 分离出x1和x2，即每个向量对的两个元素
+        # x1, x2 = rearrange(x, '... (d two) -> two ... d', two=2)
 
-        # # 2. 分离出x1和x2，即每个向量对的两个元素
-        # x1 = x_shaped[..., 0] # 对应所有a
-        # x2 = x_shaped[..., 1] # 对应所有b
-        x1, x2 = rearrange(x, '... (d two) -> two ... d', two=2)
+        # # 3. 根据当前序列位置，获取对应的cos和sin值
+        # # cos_vals 形状 (seq_len, d_model//2)
+        # # 20250925 add torch.squeeze
+        # seq_len = x.shape[-2]
+        # with torch.no_grad():
+        #     if token_positions is not None:
+        #         cos = self.cos_cached[token_positions]
+        #         sin = self.sin_cached[token_positions]
+        #     else:
+        #         cos = self.cos_cached[:seq_len, ]
+        #         sin = self.cos_cached[:seq_len, ]
 
-        # 3. 根据当前序列位置，获取对应的cos和sin值
-        # cos_vals 形状 (seq_len, d_model//2)
-        # 20250925 add torch.squeeze
-        cos = torch.squeeze(self.cos_cached[token_positions])
-        sin = torch.squeeze(self.sin_cached[token_positions])
+        #     cos = torch.squeeze(cos)
+        #     sin = torch.squeeze(sin)
 
-        # 4. 应用旋转公式（这步就是在“填充”和计算！）
-        x1_rotated = einsum(x1, cos, "... seq_len d_model_div2, seq_len d_model_div2 -> ... seq_len d_model_div2") - \
-                     einsum(x2, sin, "... seq_len d_model_div2, seq_len d_model_div2 -> ... seq_len d_model_div2")
-        x2_rotated = einsum(x1, sin, "... seq_len d_model_div2, seq_len d_model_div2 -> ... seq_len d_model_div2") + \
-                     einsum(x2, cos, "... seq_len d_model_div2, seq_len d_model_div2 -> ... seq_len d_model_div2")
+        # # 4. 应用旋转公式（这步就是在“填充”和计算！）
+        # x1_rotated = einsum(x1, cos, "... seq_len d_model_div2, seq_len d_model_div2 -> ... seq_len d_model_div2") - \
+        #              einsum(x2, sin, "... seq_len d_model_div2, seq_len d_model_div2 -> ... seq_len d_model_div2")
+        # x2_rotated = einsum(x1, sin, "... seq_len d_model_div2, seq_len d_model_div2 -> ... seq_len d_model_div2") + \
+        #              einsum(x2, cos, "... seq_len d_model_div2, seq_len d_model_div2 -> ... seq_len d_model_div2")
 
-        # # 5. 将旋转后的结果拼接回去
-        # x_rotated = torch.stack([x1_rotated, x2_rotated], dim=-1)
-        # # print(x1_rotated.shape, x2_rotated.shape, x_rotated.shape)
+        # # # 6. 展平回原始形状
+        # y = rearrange([x1_rotated, x2_rotated], 'two ... d_model_div2  -> ... (d_model_div2 two)')
+        # return y
 
-        # # 6. 展平回原始形状
-        # y = rearrange(x_rotated, "... seq_len d_model_div2 two -> ... seq_len (d_model_div2 two)")
-        y = rearrange([x1_rotated, x2_rotated], 'two ... d_model_div2  -> ... (d_model_div2 two)')
+        
+        seq_len = x.shape[-2]
+        # 将x视为复数 (实部x1,虚部x2)
+        x = rearrange(x, '... (d two) -> ... d two', two=2)
+        x_complex = torch.view_as_complex(x.contiguous())
 
-        return y
+        # 获取对应位置的旋转角度 [seq_len,dim//2]
+        with torch.no_grad():
+            if token_positions is not None:
+                angles = self.freqs[token_positions,]
+            else:
+                angles = self.freqs[:seq_len, ]
 
+        # 构造复数旋转因子 e^{i*theta}
+        rot_factor = torch.polar(
+            torch.ones_like(angles),  # 模为1
+            angles                   # 角度
+        )  # [seq_len,dim//2]
+
+        # 复数乘法旋转
+        x_rotated = x_complex * rot_factor
+        
+        # 转换回实数表示
+        return torch.view_as_real(x_rotated).flatten(-2)
+        
 
 def softmax_func(in_features: torch.Tensor, dim: int) -> torch.Tensor:
     max_val, _ = torch.max(in_features, dim=dim, keepdim=True)
@@ -149,10 +173,10 @@ class softmax(nn.Module):
 def scaled_dot_product_attention_func(Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor, 
                                       mask: torch.Tensor | None=None) -> torch.Tensor:
     d_k = Q.shape[-1]
-    QK = einsum(Q, K, "... queries d_k, ... keys d_k -> ... queries keys")
+    QK = einsum(Q, K, "... queries d_k, ... keys d_k -> ... queries keys") / math.sqrt(d_k)
     if mask is not None:
-        QK = QK.masked_fill(mask == 0, float("-1e20"))
-    y = softmax_func(QK / math.sqrt(d_k), dim=-1)
+        QK = QK.masked_fill(mask == 0, float("-inf"))
+    y = softmax_func(QK, dim=-1)
     y = einsum(y, V, "... queries keys, ... keys d_v -> ... queries d_v") 
     return y
 
@@ -191,7 +215,7 @@ class causal_multihead_self_attention(nn.Module):
         seq_len = in_features.shape[-2]
         qkv = einsum(self.qkv_weight, in_features, "three_out_dim out_dim, ... seq_len out_dim -> ... seq_len three_out_dim")
         q, k, v = rearrange(qkv, "... seq_len (three num_heads head_dim) -> three ... num_heads seq_len head_dim", three=3, num_heads=self.num_heads)
-        if self.rope is not None:
+        if (self.rope is not None):
             q = self.rope(q, token_positions)
             k = self.rope(k, token_positions)
         mask = self.create_causal_mask(seq_len, in_features.device)
@@ -199,3 +223,24 @@ class causal_multihead_self_attention(nn.Module):
         out = rearrange(out, "... num_heads seq_len head_dim -> ... seq_len (num_heads head_dim)")
         out = einsum(self.o_weight, out, "out_dim in_dim, ... seq_len in_dim -> ... seq_len out_dim")
         return out
+
+class transformer_block(nn.Module):
+    def __init__(self, d_model: int, num_heads: int, d_ff: int,
+                 max_seq_len: int | None=None,  
+                 theta: float | None=None, 
+                 device: torch.device | None=None, 
+                 dtype: torch.dtype| None=None):
+        super().__init__()
+        self.ln1 = rmsnorm(d_model, device=device, dtype=dtype)
+        self.ln2 = rmsnorm(d_model, device=device, dtype=dtype)
+        self.attention = causal_multihead_self_attention(d_model, num_heads, max_seq_len=max_seq_len, \
+                                                         theta=theta, device=device, dtype=dtype)
+        self.ffn = swiglu(d_model, d_ff, device=device, dtype=dtype)
+    
+    def forward(self, in_features: torch.Tensor):
+        y1 = self.attention(self.ln1(in_features))
+        y2 = in_features + y1
+        y3 = self.ffn(self.ln2(y2))
+        y4 = y2 + y3
+        return y4
+

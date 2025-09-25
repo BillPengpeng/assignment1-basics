@@ -30,7 +30,7 @@ from tests.common import gpt2_bytes_to_unicode
 from einops import rearrange,einsum
 from cs336_basics.module import linear, embedding, rmsnorm, silu, swiglu, rope
 from cs336_basics.module import softmax, softmax_func, scaled_dot_product_attention_func
-from cs336_basics.module import causal_multihead_self_attention
+from cs336_basics.module import causal_multihead_self_attention, transformer_block
 
 def run_linear(
     d_in: int,
@@ -322,7 +322,19 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    model = transformer_block(d_model, num_heads, d_ff, max_seq_len=max_seq_len, theta=theta)
+    with torch.no_grad():
+        model.attention.qkv_weight[:d_model,].copy_(weights['attn.q_proj.weight'])
+        model.attention.qkv_weight[d_model:2*d_model,].copy_(weights['attn.k_proj.weight'])
+        model.attention.qkv_weight[2*d_model:3*d_model,].copy_(weights['attn.v_proj.weight'])
+        model.attention.o_weight.copy_(weights['attn.output_proj.weight'])
+        model.ln1.g.copy_(weights['ln1.weight'])
+        model.ln2.g.copy_(weights['ln2.weight'])
+        model.ffn.w1.copy_(weights['ffn.w1.weight'])
+        model.ffn.w2.copy_(weights['ffn.w2.weight'])
+        model.ffn.w3.copy_(weights['ffn.w3.weight'])
+    y = model(in_features)
+    return y
 
 
 def run_transformer_lm(
