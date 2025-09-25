@@ -28,7 +28,8 @@ from tests.common import gpt2_bytes_to_unicode
 
 # 20250923
 from einops import rearrange,einsum
-from cs336_basics.module import linear, embedding, rmsnorm, silu, swiglu, rope, softmax
+from cs336_basics.module import linear, embedding, rmsnorm, silu, swiglu, rope
+from cs336_basics.module import softmax, softmax_func, scaled_dot_product_attention_func
 
 def run_linear(
     d_in: int,
@@ -135,7 +136,7 @@ def run_scaled_dot_product_attention(
     Returns:
         Float[Tensor, " ... queries d_v"]: Output of SDPA
     """
-    raise NotImplementedError
+    return scaled_dot_product_attention_func(Q, K, V, mask)
 
 
 def run_multihead_self_attention(
@@ -471,9 +472,10 @@ def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, "
         Float[Tensor, "..."]: Tensor of with the same shape as `in_features` with the output of
         softmax normalizing the specified `dim`.
     """
-    model = softmax()
-    y = model(in_features, dim)
-    return y
+    # model = softmax()
+    # y = model(in_features, dim)
+    # return y
+    return softmax_func(in_features, dim)
 
 
 

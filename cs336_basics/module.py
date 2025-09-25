@@ -1,3 +1,4 @@
+import math
 import torch
 import torch.nn as nn
 from einops import rearrange,einsum
@@ -129,13 +130,27 @@ class rope(nn.Module):
 
         return y
 
+
+def softmax_func(in_features: torch.Tensor, dim: int) -> torch.Tensor:
+    max_val, _ = torch.max(in_features, dim=dim, keepdim=True)
+    x1 = torch.exp(in_features - max_val)
+    x2 = torch.sum(x1, dim=dim, keepdim=True)
+    y = x1 / x2
+    return y
+
 class softmax(nn.Module):
     def __init__(self):
         super().__init__()
     
     def forward(self, in_features: torch.Tensor, dim: int) -> torch.Tensor:
-        max_val, _ = torch.max(in_features, dim=dim, keepdim=True)
-        x1 = torch.exp(in_features - max_val)
-        x2 = torch.sum(x1, dim=dim, keepdim=True)
-        y = x1 / x2
-        return y
+        return softmax_func(in_features, dim)
+
+def scaled_dot_product_attention_func(Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor, 
+                                      mask: torch.Tensor | None=None) -> torch.Tensor:
+    d_k = Q.shape[-1]
+    QK = einsum(Q, K, "... queries d_k, ... keys d_k -> ... queries keys")
+    if mask is not None:
+        QK = QK.masked_fill(mask == 0, float("-1e20"))
+    y = softmax_func(QK / math.sqrt(d_k), dim=-1)
+    y = einsum(y, V, "... queries keys, ... keys d_v -> ... queries d_v") 
+    return y
