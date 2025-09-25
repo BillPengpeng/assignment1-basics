@@ -28,7 +28,7 @@ from tests.common import gpt2_bytes_to_unicode
 
 # 20250923
 from einops import rearrange,einsum
-from cs336_basics.module import linear, embedding, rmsnorm, silu, swiglu
+from cs336_basics.module import linear, embedding, rmsnorm, silu, swiglu, rope
 
 def run_linear(
     d_in: int,
@@ -231,7 +231,9 @@ def run_rope(
     Returns:
         Float[Tensor, " ... sequence_length d_k"]: Tensor with RoPEd input.
     """
-    raise NotImplementedError
+    model = rope(theta, d_k, max_seq_len)
+    y = model(in_query_or_key, token_positions)
+    return y
 
 
 def run_transformer_block(
