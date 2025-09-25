@@ -128,3 +128,14 @@ class rope(nn.Module):
         y = rearrange([x1_rotated, x2_rotated], 'two ... d_model_div2  -> ... (d_model_div2 two)')
 
         return y
+
+class softmax(nn.Module):
+    def __init__(self):
+        super().__init__()
+    
+    def forward(self, in_features: torch.Tensor, dim: int) -> torch.Tensor:
+        max_val, _ = torch.max(in_features, dim=dim, keepdim=True)
+        x1 = torch.exp(in_features - max_val)
+        x2 = torch.sum(x1, dim=dim, keepdim=True)
+        y = x1 / x2
+        return y

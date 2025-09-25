@@ -28,7 +28,7 @@ from tests.common import gpt2_bytes_to_unicode
 
 # 20250923
 from einops import rearrange,einsum
-from cs336_basics.module import linear, embedding, rmsnorm, silu, swiglu, rope
+from cs336_basics.module import linear, embedding, rmsnorm, silu, swiglu, rope, softmax
 
 def run_linear(
     d_in: int,
@@ -471,7 +471,10 @@ def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, "
         Float[Tensor, "..."]: Tensor of with the same shape as `in_features` with the output of
         softmax normalizing the specified `dim`.
     """
-    raise NotImplementedError
+    model = softmax()
+    y = model(in_features, dim)
+    return y
+
 
 
 def run_cross_entropy(
