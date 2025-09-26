@@ -31,6 +31,7 @@ from einops import rearrange,einsum
 from cs336_basics.module import linear, embedding, rmsnorm, silu, swiglu, rope
 from cs336_basics.module import softmax, softmax_func, scaled_dot_product_attention_func
 from cs336_basics.module import causal_multihead_self_attention, transformer_block
+from cs336_basics.module import transformer_lm
 
 def run_linear(
     d_in: int,
@@ -416,7 +417,23 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+    model = transformer_lm(vocab_size, context_length, d_model, num_layers, num_heads, d_ff, rope_theta)
+    with torch.no_grad():
+        model.embedding.weight.copy_(weights['token_embeddings.weight'])
+        for idx in range(num_layers):
+            model.transformer_blocks[idx].attention.qkv_weight[:d_model,].copy_(weights['layers.{}.attn.q_proj.weight'.format(idx)])
+            model.transformer_blocks[idx].attention.qkv_weight[d_model:2*d_model,].copy_(weights['layers.{}.attn.k_proj.weight'.format(idx)])
+            model.transformer_blocks[idx].attention.qkv_weight[2*d_model:3*d_model,].copy_(weights['layers.{}.attn.v_proj.weight'.format(idx)])
+            model.transformer_blocks[idx].attention.o_weight.copy_(weights['layers.{}.attn.output_proj.weight'.format(idx)])
+            model.transformer_blocks[idx].ln1.g.copy_(weights['layers.{}.ln1.weight'.format(idx)])
+            model.transformer_blocks[idx].ln2.g.copy_(weights['layers.{}.ln2.weight'.format(idx)])
+            model.transformer_blocks[idx].ffn.w1.copy_(weights['layers.{}.ffn.w1.weight'.format(idx)])
+            model.transformer_blocks[idx].ffn.w2.copy_(weights['layers.{}.ffn.w2.weight'.format(idx)])
+            model.transformer_blocks[idx].ffn.w3.copy_(weights['layers.{}.ffn.w3.weight'.format(idx)])
+        model.ln_final.g.copy_(weights['ln_final.weight'])
+        model.lm_head.weight.copy_(weights['lm_head.weight'])
+    y = model(in_indices)
+    return y
 
 
 def run_rmsnorm(

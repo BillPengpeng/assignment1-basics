@@ -244,3 +244,28 @@ class transformer_block(nn.Module):
         y4 = y2 + y3
         return y4
 
+class transformer_lm(nn.Module):
+    def __init__(self, vocab_size: int, context_length: int, 
+                 d_model: int, num_layers: int, num_heads: int,
+                 d_ff: int, rope_theta: float,
+                 device: torch.device | None=None, 
+                 dtype: torch.dtype| None=None):
+        super().__init__()
+        self.embedding = embedding(vocab_size, d_model, device=device, dtype=dtype)
+        self.transformer_blocks = list()
+        self.num_layers = num_layers
+        # d_ff = d_model * 8 // 3 
+        for i in range(num_layers):
+            self.transformer_blocks.append(transformer_block(d_model, num_heads, d_ff, max_seq_len=context_length, \
+                                                             theta=rope_theta, device=device, dtype=dtype))
+        
+        self.ln_final = rmsnorm(d_model, device=device, dtype=dtype)
+        self.lm_head = linear(d_model, vocab_size, device=device, dtype=dtype)
+    
+    def forward(self, in_features: torch.Tensor):
+        y = self.embedding(in_features)
+        for idx in range(self.num_layers):
+            y = self.transformer_blocks[idx](y)
+        y = self.ln_final(y)
+        y = self.lm_head(y)
+        return y
