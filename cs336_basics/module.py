@@ -102,58 +102,58 @@ class rope(nn.Module):
 
 
     def forward(self, x:torch.Tensor, token_positions:torch.Tensor, conj:bool=False)->torch.Tensor:
-        # # # 2. 分离出x1和x2，即每个向量对的两个元素
-        # x1, x2 = rearrange(x, '... (d two) -> two ... d', two=2)
+        # # 2. 分离出x1和x2，即每个向量对的两个元素
+        x1, x2 = rearrange(x, '... (d two) -> two ... d', two=2)
 
-        # # 3. 根据当前序列位置，获取对应的cos和sin值
-        # # cos_vals 形状 (seq_len, d_model//2)
-        # # 20250925 add torch.squeeze
-        # seq_len = x.shape[-2]
-        # with torch.no_grad():
-        #     if token_positions is not None:
-        #         cos = self.cos_cached[token_positions]
-        #         sin = self.sin_cached[token_positions]
-        #     else:
-        #         cos = self.cos_cached[:seq_len, ]
-        #         sin = self.cos_cached[:seq_len, ]
-
-        #     cos = torch.squeeze(cos)
-        #     sin = torch.squeeze(sin)
-
-        # # 4. 应用旋转公式（这步就是在“填充”和计算！）
-        # x1_rotated = einsum(x1, cos, "... seq_len d_model_div2, seq_len d_model_div2 -> ... seq_len d_model_div2") - \
-        #              einsum(x2, sin, "... seq_len d_model_div2, seq_len d_model_div2 -> ... seq_len d_model_div2")
-        # x2_rotated = einsum(x1, sin, "... seq_len d_model_div2, seq_len d_model_div2 -> ... seq_len d_model_div2") + \
-        #              einsum(x2, cos, "... seq_len d_model_div2, seq_len d_model_div2 -> ... seq_len d_model_div2")
-
-        # # # 6. 展平回原始形状
-        # y = rearrange([x1_rotated, x2_rotated], 'two ... d_model_div2  -> ... (d_model_div2 two)')
-        # return y
-
-        
+        # 3. 根据当前序列位置，获取对应的cos和sin值
+        # cos_vals 形状 (seq_len, d_model//2)
+        # 20250925 add torch.squeeze
         seq_len = x.shape[-2]
-        # 将x视为复数 (实部x1,虚部x2)
-        x = rearrange(x, '... (d two) -> ... d two', two=2)
-        x_complex = torch.view_as_complex(x.contiguous())
-
-        # 获取对应位置的旋转角度 [seq_len,dim//2]
         with torch.no_grad():
             if token_positions is not None:
-                angles = self.freqs[token_positions,]
+                cos = self.cos_cached[token_positions]
+                sin = self.sin_cached[token_positions]
             else:
-                angles = self.freqs[:seq_len, ]
+                cos = self.cos_cached[:seq_len, ]
+                sin = self.sin_cached[:seq_len, ]
 
-        # 构造复数旋转因子 e^{i*theta}
-        rot_factor = torch.polar(
-            torch.ones_like(angles),  # 模为1
-            angles                   # 角度
-        )  # [seq_len,dim//2]
+            cos = torch.squeeze(cos)
+            sin = torch.squeeze(sin)
 
-        # 复数乘法旋转
-        x_rotated = x_complex * rot_factor
+        # 4. 应用旋转公式（这步就是在“填充”和计算！）
+        x1_rotated = einsum(x1, cos, "... seq_len d_model_div2, seq_len d_model_div2 -> ... seq_len d_model_div2") - \
+                     einsum(x2, sin, "... seq_len d_model_div2, seq_len d_model_div2 -> ... seq_len d_model_div2")
+        x2_rotated =   einsum(x1, sin, "... seq_len d_model_div2, seq_len d_model_div2 -> ... seq_len d_model_div2") + \
+                       einsum(x2, cos, "... seq_len d_model_div2, seq_len d_model_div2 -> ... seq_len d_model_div2")
+
+        # # 6. 展平回原始形状
+        y = rearrange([x1_rotated, x2_rotated], 'two ... d_model_div2  -> ... (d_model_div2 two)')
+        return y
+
         
-        # 转换回实数表示
-        return torch.view_as_real(x_rotated).flatten(-2)
+        # seq_len = x.shape[-2]
+        # # 将x视为复数 (实部x1,虚部x2)
+        # x = rearrange(x, '... (d two) -> ... d two', two=2)
+        # x_complex = torch.view_as_complex(x.contiguous())
+
+        # # 获取对应位置的旋转角度 [seq_len,dim//2]
+        # with torch.no_grad():
+        #     if token_positions is not None:
+        #         angles = self.freqs[token_positions,]
+        #     else:
+        #         angles = self.freqs[:seq_len, ]
+
+        # # 构造复数旋转因子 e^{i*theta}
+        # rot_factor = torch.polar(
+        #     torch.ones_like(angles),  # 模为1
+        #     angles                   # 角度
+        # )  # [seq_len,dim//2]
+
+        # # 复数乘法旋转
+        # x_rotated = x_complex * rot_factor
+        
+        # # 转换回实数表示
+        # return torch.view_as_real(x_rotated).flatten(-2)
         
 
 def softmax_func(in_features: torch.Tensor, dim: int) -> torch.Tensor:
