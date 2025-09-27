@@ -69,10 +69,14 @@ class swiglu(nn.Module):
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # print(x.shape, self.w1.shape, self.w2.shape)
+        # seq X d_ff X 2*d_model
         x1 = einsum(self.w1, x, "d_ff d_model, ... d_model -> ... d_ff")
+        # seq X d_ff X 2*d_model
         x3 = einsum(self.w3, x, "d_ff d_model, ... d_model -> ... d_ff")
         y = self.act(x1) * x3
+        # seq X 2*d_ff X d_model
         y = einsum(self.w2, y, "d_model d_ff, ... d_ff -> ... d_model")
+        # => seq * 6 * d_ff * d_model
         return y
     
 class rope(nn.Module):
@@ -161,6 +165,7 @@ def softmax_func(in_features: torch.Tensor, dim: int) -> torch.Tensor:
     x1 = torch.exp(in_features - max_val)
     x2 = torch.sum(x1, dim=dim, keepdim=True)
     y = x1 / x2
+    # import pdb;pdb.set_trace()
     return y
 
 class softmax(nn.Module):
@@ -173,10 +178,12 @@ class softmax(nn.Module):
 def scaled_dot_product_attention_func(Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor, 
                                       mask: torch.Tensor | None=None) -> torch.Tensor:
     d_k = Q.shape[-1]
+    # queries X keys X 2*d_k 
     QK = einsum(Q, K, "... queries d_k, ... keys d_k -> ... queries keys") / math.sqrt(d_k)
     if mask is not None:
         QK = QK.masked_fill(mask == 0, float("-inf"))
     y = softmax_func(QK, dim=-1)
+    # queries X d_v X 2*keys
     y = einsum(y, V, "... queries keys, ... keys d_v -> ... queries d_v") 
     return y
 
@@ -190,6 +197,7 @@ class causal_multihead_self_attention(nn.Module):
         self.d_model = d_model
         self.num_heads = num_heads
         self.head_dim = d_model // num_heads
+        # PA: 4*d_model^2
         self.qkv_weight = nn.Parameter(torch.empty(3 * d_model, d_model, dtype=dtype, device=device))
         self.o_weight = nn.Parameter(torch.empty(self.d_model, self.d_model, dtype=dtype, device=device))
         std = (2.0 / (4 * self.head_dim)) ** 0.5
@@ -213,15 +221,19 @@ class causal_multihead_self_attention(nn.Module):
     def forward(self, in_features: torch.Tensor,
                 token_positions:torch.Tensor | None=None) -> torch.Tensor:
         seq_len = in_features.shape[-2]
+        # CA:seq_len X 3*d_model X 2*d_model = 6*d_model^2 * seq_len
         qkv = einsum(self.qkv_weight, in_features, "three_out_dim out_dim, ... seq_len out_dim -> ... seq_len three_out_dim")
         q, k, v = rearrange(qkv, "... seq_len (three num_heads head_dim) -> three ... num_heads seq_len head_dim", three=3, num_heads=self.num_heads)
         if (self.rope is not None):
             q = self.rope(q, token_positions)
             k = self.rope(k, token_positions)
         mask = self.create_causal_mask(seq_len, in_features.device)
+        # CA:(queries X keys X 2*d_k + queries X d_v X 2*keys)  X num_heads = seq_len^2 X 4*head_dim X num_heads = 4 * d_model * seq_len^2
         out = scaled_dot_product_attention_func(q, k, v, mask)
         out = rearrange(out, "... num_heads seq_len head_dim -> ... seq_len (num_heads head_dim)")
+        # CA:out_dim X seq_len X 2*in_dim = 2 * seq_len * d_model^2
         out = einsum(self.o_weight, out, "out_dim in_dim, ... seq_len in_dim -> ... seq_len out_dim")
+        # CA:=> 8*seq_len*d_model^2 + 4*d_model*seq_len^2
         return out
 
 class transformer_block(nn.Module):
@@ -233,8 +245,10 @@ class transformer_block(nn.Module):
         super().__init__()
         self.ln1 = rmsnorm(d_model, device=device, dtype=dtype)
         self.ln2 = rmsnorm(d_model, device=device, dtype=dtype)
+        # CA => 8*seq_len*d_model^2 + 4*d_model*seq_len^2
         self.attention = causal_multihead_self_attention(d_model, num_heads, max_seq_len=max_seq_len, \
                                                          theta=theta, device=device, dtype=dtype)
+        # CA => 6*seq*d_ff*d_model
         self.ffn = swiglu(d_model, d_ff, device=device, dtype=dtype)
     
     def forward(self, in_features: torch.Tensor):
@@ -251,14 +265,18 @@ class transformer_lm(nn.Module):
                  device: torch.device | None=None, 
                  dtype: torch.dtype| None=None):
         super().__init__()
-        self.embedding = embedding(vocab_size, d_model, device=device, dtype=dtype)
+        # PA: vocab_size*d_model
+        self.embedding = embedding(vocab_size, d_model, device=device, dtype=dtype) 
         self.transformer_blocks = list()
         self.num_layers = num_layers
-        # d_ff = d_model * 8 // 3 
+        # CA:num_layers * (8*seq_len*d_model^2 + 4*d_model*seq_len^2 + 6*seq*d_ff*d_model)
+        # PA:num_layers * (4*d_model^2 + 2*d_model + 3*d_model*d_ff)
         for i in range(num_layers):
             self.transformer_blocks.append(transformer_block(d_model, num_heads, d_ff, max_seq_len=context_length, \
                                                              theta=rope_theta, device=device, dtype=dtype))
         
+        # CA:2*seq_len*vocab_size*d_model
+        # PA:d_model + d_model*vocab_size
         self.ln_final = rmsnorm(d_model, device=device, dtype=dtype)
         self.lm_head = linear(d_model, vocab_size, device=device, dtype=dtype)
     
