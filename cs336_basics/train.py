@@ -102,3 +102,26 @@ def get_lr_cosine_schedule(
         return min_learning_rate
     else:
         return min_learning_rate + 0.5 * (1 + math.cos((it - warmup_iters) / (cosine_cycle_iters - warmup_iters) * math.pi)) * (max_learning_rate - min_learning_rate)
+
+
+def gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float) -> None:
+    # 收集所有参数的梯度
+    gradients = []
+    for param in parameters:
+        if param.grad is not None:
+            gradients.append(param.grad)
+    
+    if not gradients:
+        return  # 如果没有梯度，直接返回
+    
+    # 计算所有梯度的L2范数（使用PyTorch内置函数）
+    total_norm = torch.norm(
+        torch.stack([torch.norm(grad) for grad in gradients]), 
+        p=2
+    )
+    
+    # 如果范数超过最大值，进行裁剪
+    clip_coef = max_l2_norm / (total_norm + 1e-6)
+    if clip_coef < 1.0:
+        for grad in gradients:
+            grad.mul_(clip_coef)  # 原地修改梯度值
