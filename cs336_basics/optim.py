@@ -70,17 +70,18 @@ class AdamW(torch.optim.Optimizer):
                 grad = p.grad.data # Get the gradient of loss with respect to p.
                 # p.data-= lr / math.sqrt(t + 1) * grad # Update weight tensor in-place.
 
-                if 'first_order' not in self.state.keys():
-                    self.state['first_order'] = (1 - betas[0]) * grad
+                if 'first_order' not in state.keys():
+                    state['first_order'] = (1 - betas[0]) * grad
                 else:
-                    self.state['first_order'] = betas[0]*self.state['first_order'] + (1 - betas[0]) * grad
-                first_order = self.state['first_order']
+                    # import pdb;pdb.set_trace()
+                    state['first_order'] = betas[0]*state['first_order'] + (1 - betas[0]) * grad
+                first_order = state['first_order']
 
-                if 'second_order' not in self.state.keys():
-                    self.state['second_order'] = (1 - betas[1]) * grad * grad
+                if 'second_order' not in state.keys():
+                    state['second_order'] = (1 - betas[1]) * grad * grad
                 else:
-                    self.state['second_order'] = betas[1]*self.state['second_order'] + (1 - betas[1]) * grad * grad
-                second_order = self.state['second_order']
+                    state['second_order'] = betas[1]*state['second_order'] + (1 - betas[1]) * grad * grad
+                second_order = state['second_order']
 
                 lr = group["lr"] * math.sqrt(1 - betas[1]**t) / (1 - betas[0]**t)
                 # import pdb;pdb.set_trace()

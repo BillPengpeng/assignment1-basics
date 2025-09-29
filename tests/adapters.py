@@ -33,7 +33,11 @@ from cs336_basics.module import softmax, softmax_func, scaled_dot_product_attent
 from cs336_basics.module import causal_multihead_self_attention, transformer_block
 from cs336_basics.module import transformer_lm
 # 20250927
-from cs336_basics.train import cross_entropy_func, AdamW, get_lr_cosine_schedule, gradient_clipping
+from cs336_basics.optim import cross_entropy_func, AdamW, get_lr_cosine_schedule, gradient_clipping
+# 20250928
+from cs336_basics.data import get_batch
+# 20250929
+from cs336_basics.checkpoint import save_checkpoint, load_checkpoint
 
 def run_linear(
     d_in: int,
@@ -502,7 +506,7 @@ def run_get_batch(
         is the sampled input sequences, and the second tuple item is the corresponding
         language modeling labels.
     """
-    raise NotImplementedError
+    return get_batch(dataset, batch_size, context_length, device)
 
 
 def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, " ..."]:
@@ -606,7 +610,7 @@ def run_save_checkpoint(
             we've completed.
         out (str | os.PathLike | BinaryIO | IO[bytes]): Path or file-like object to serialize the model, optimizer, and iteration to.
     """
-    raise NotImplementedError
+    save_checkpoint(model, optimizer, iteration, out)
 
 
 def run_load_checkpoint(
@@ -627,7 +631,7 @@ def run_load_checkpoint(
     Returns:
         int: the previously-serialized number of iterations.
     """
-    raise NotImplementedError
+    return load_checkpoint(src, model, optimizer)
 
 GPT2_TOKENIZER_REGEX = \
     r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
