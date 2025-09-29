@@ -5,8 +5,9 @@ from typing import Optional
 from einops import rearrange,einsum
 from collections.abc import Callable, Iterable
 from cs336_basics.module import softmax_func
+import torch.nn.functional as F
 
-def cross_entropy_func(pred: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+def cross_entropy_func(pred: torch.Tensor, targets: torch.Tensor, reduction: str ='mean') -> torch.Tensor:
     # num_classes = pred.shape[-1]
     # probs = softmax_func(pred, dim=-1)
     # one_hot = torch.zeros(targets.size(0), num_classes, dtype=torch.float32)
@@ -15,14 +16,26 @@ def cross_entropy_func(pred: torch.Tensor, targets: torch.Tensor) -> torch.Tenso
     # y = -torch.mean(torch.log(y))
 
     num_classes = pred.shape[-1]
+    pred = pred.reshape(-1, num_classes)
+    targets = targets.reshape(-1)
+
     max_val, _ = torch.max(pred, dim=-1, keepdim=True)
     exp_val = torch.exp(pred - max_val)
     sum_val = torch.sum(exp_val, dim=-1, keepdim=True)
 
     one_hot = torch.zeros(targets.size(0), num_classes, dtype=torch.float32)
-    one_hot.scatter_(1, targets.unsqueeze(1), 1)
-    pred_sum = torch.sum(pred * one_hot, dim=-1)
-    y = -torch.mean(pred_sum - torch.log(sum_val) - max_val)
+    # 确保索引是long类型
+    targets_long = targets.long()
+    one_hot.scatter_(1, targets_long.unsqueeze(1), 1)
+    pred_sum = torch.sum(pred * one_hot, dim=-1, keepdim=True)
+    if reduction == 'mean':
+        y = -torch.mean(pred_sum - torch.log(sum_val) - max_val)
+        # y2 = F.cross_entropy(pred.view(-1, pred.size(-1)), targets_long.view(-1), reduction='mean')
+        # import pdb;pdb.set_trace()
+    else:
+        y = -torch.sum(pred_sum - torch.log(sum_val) - max_val)
+        # y2 = F.cross_entropy(pred.view(-1, pred.size(-1)), targets_long.view(-1), reduction='sum')
+        # import pdb;pdb.set_trace()
     return y
 
 class SGD(torch.optim.Optimizer):

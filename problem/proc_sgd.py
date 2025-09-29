@@ -9,7 +9,7 @@ import torch.nn as nn
 import matplotlib.pyplot as plt
 
 # 20250927
-from cs336_basics.train import SGD
+from cs336_basics.optim import SGD
 
 def toy_sgd(lr, epochs, num):
     all_losses = []

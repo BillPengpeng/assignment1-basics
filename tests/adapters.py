@@ -35,7 +35,7 @@ from cs336_basics.module import transformer_lm
 # 20250927
 from cs336_basics.optim import cross_entropy_func, AdamW, get_lr_cosine_schedule, gradient_clipping
 # 20250928
-from cs336_basics.data import get_batch
+from cs336_basics.data import DataLoader
 # 20250929
 from cs336_basics.checkpoint import save_checkpoint, load_checkpoint
 
@@ -486,6 +486,8 @@ def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
     return y
 
 
+data_loader = DataLoader()
+
 def run_get_batch(
     dataset: npt.NDArray, batch_size: int, context_length: int, device: str
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -506,7 +508,8 @@ def run_get_batch(
         is the sampled input sequences, and the second tuple item is the corresponding
         language modeling labels.
     """
-    return get_batch(dataset, batch_size, context_length, device)
+    # return get_batch(dataset, batch_size, context_length, device)
+    return data_loader.get_batch(dataset, batch_size, context_length, device)
 
 
 def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, " ..."]:
@@ -1014,8 +1017,16 @@ class BPETokenizer(Tokenizer):
 
     def decode(self, indices: list[int]) -> str:
         bytes_list = list(map(self.vocab.get, indices))  # @inspect bytes_list
-        string = b"".join(bytes_list).decode("utf-8", errors='ignore')  # @inspect string
-        return string
+        # print(bytes_list)
+        try:
+            # string = b"".join(bytes_list).decode("utf-8", errors='ignore')  # @inspect string
+            string = b"".join(bytes_list).decode("utf-8", errors='replace')  # @inspect string
+            return string
+        except:
+            print(indices, bytes_list)
+            cleaned = [b for b in bytes_list if b is not None]
+            return b"".join(cleaned).decode("utf-8", errors='replace')
+        
 
 def get_tokenizer(
     vocab: dict[int, bytes],
