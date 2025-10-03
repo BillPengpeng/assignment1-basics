@@ -1,0 +1,31 @@
+dataset:
+  vocab_size: 10000
+  train: ./data/TinyStoriesV2-GPT4-train-encoded.npy
+  valid: ./data/TinyStoriesV2-GPT4-valid-encoded.npy
+  vocab_path: ./data/TinyStoriesV2-GPT4-vacab.json
+  merges_path: ./data/TinyStoriesV2-GPT4-merge.txt
+
+model:
+  seq_len: 256
+  num_layers: 4
+  d_model: 512
+  num_heads: 16
+  d_ff: 1344
+  rope_theta: 10000
+  
+scheduler:
+  max_learning_rate: 0.001
+  min_learning_rate: 0.0001
+  weight_decay: 0.1
+  num_epochs: 10
+  total_tokens: 327680000
+  cosine_cycle_iter_ratio: 0.9 
+  batchsize: 128
+  warmup_iters: 100
+  max_l2_norm: 1.0
+
+print_freq: 10
+save_freq: 5000
+eval_freq: 200
+eval_iters: 50
+workdir: ./workdir/tinystories_v1.0_lr0.001_wd0.1_mln1.0_wi100_bs64_remove_norm/
