@@ -1,4 +1,5 @@
 import math
+import logging
 import torch
 import torch.nn as nn
 from einops import rearrange,einsum
@@ -40,7 +41,9 @@ class rmsnorm(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         dtype = x.dtype
         input = x.type(torch.float32)
-        rms = torch.sqrt(torch.mean(input.pow(2), dim=-1, keepdim=True) + self.eps)
+        # rms = torch.sqrt(torch.mean(input.pow(2), dim=-1, keepdim=True) + self.eps)
+        squared = torch.square(input)
+        rms = torch.sqrt(torch.mean(squared, dim=-1, keepdim=True) + self.eps)
         y = input / rms * self.g
         y = y.type(dtype)
         return y
@@ -77,6 +80,37 @@ class swiglu(nn.Module):
         # seq X 2*d_ff X d_model
         y = einsum(self.w2, y, "d_model d_ff, ... d_ff -> ... d_model")
         # => seq * 6 * d_ff * d_model
+        return y
+
+class swiglu(nn.Module): 
+    def __init__(self, d_model: int, d_ff: int,
+                 device: torch.device | None=None, 
+                 dtype: torch.dtype| None=None):
+        super().__init__()
+        self.act = silu()
+        self.w1 = nn.Parameter(torch.empty(d_ff, d_model, dtype=dtype, device=device))
+        self.w3 = nn.Parameter(torch.empty(d_ff, d_model, dtype=dtype, device=device))
+        self.w2 = nn.Parameter(torch.empty(d_model, d_ff, dtype=dtype, device=device))
+        std = (2.0 / (d_model + d_ff)) ** 0.5
+        nn.init.trunc_normal_(self.w1, mean=0, std=std, a=-3*std, b=3*std)
+        nn.init.trunc_normal_(self.w2, mean=0, std=std, a=-3*std, b=3*std)
+        nn.init.trunc_normal_(self.w3, mean=0, std=std, a=-3*std, b=3*std)
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # print(x.shape, self.w1.shape, self.w2.shape)
+        # seq X d_ff X 2*d_model
+        x1 = einsum(self.w1, x, "d_ff d_model, ... d_model -> ... d_ff")
+        # seq X d_ff X 2*d_model
+        x3 = einsum(self.w3, x, "d_ff d_model, ... d_model -> ... d_ff")
+        y = self.act(x1) * x3
+        # seq X 2*d_ff X d_model
+        y = einsum(self.w2, y, "d_model d_ff, ... d_ff -> ... d_model")
+        # => seq * 6 * d_ff * d_model
+
+        # # 20251002 SiLU
+        # x1 = einsum(self.w1, x, "d_ff d_model, ... d_model -> ... d_ff")
+        # y = self.act(x1)
+        # y = einsum(self.w2, y, "d_model d_ff, ... d_ff -> ... d_model")
         return y
     
 class rope(nn.Module):
@@ -200,7 +234,9 @@ class causal_multihead_self_attention(nn.Module):
         # PA: 4*d_model^2
         self.qkv_weight = nn.Parameter(torch.empty(3 * d_model, d_model, dtype=dtype, device=device))
         self.o_weight = nn.Parameter(torch.empty(self.d_model, self.d_model, dtype=dtype, device=device))
-        std = (2.0 / (4 * self.head_dim)) ** 0.5
+        # std = (2.0 / (4 * self.head_dim)) ** 0.5
+        # 20251001 head_dim => d_model
+        std = (2.0 / (4 * self.d_model)) ** 0.5
         nn.init.trunc_normal_(self.qkv_weight, mean=0, std=std, a=-3*std, b=3*std)
         std = (2.0 / (2 * self.d_model)) ** 0.5
         nn.init.trunc_normal_(self.o_weight, mean=0, std=std, a=-3*std, b=3*std)
@@ -210,6 +246,9 @@ class causal_multihead_self_attention(nn.Module):
             self.rope = rope(theta, self.head_dim, max_seq_len, device)
         else:
             self.rope = None
+
+        # # 20251002 no_pos_emb
+        # self.rope = None
 
     def create_causal_mask(self, seq_len: int, device: torch.device = None):
         row_indices = torch.arange(seq_len, device=device)
@@ -245,6 +284,8 @@ class transformer_block(nn.Module):
         super().__init__()
         self.ln1 = rmsnorm(d_model, device=device, dtype=dtype)
         self.ln2 = rmsnorm(d_model, device=device, dtype=dtype)
+        # self.ln3 = rmsnorm(d_model, device=device, dtype=dtype)
+        # self.ln4 = rmsnorm(d_model, device=device, dtype=dtype)
         # CA => 8*seq_len*d_model^2 + 4*d_model*seq_len^2
         self.attention = causal_multihead_self_attention(d_model, num_heads, max_seq_len=max_seq_len, \
                                                          theta=theta, device=device, dtype=dtype)
@@ -256,6 +297,24 @@ class transformer_block(nn.Module):
         y2 = in_features + y1
         y3 = self.ffn(self.ln2(y2))
         y4 = y2 + y3
+        
+        # 20251002 remove rmsnorm
+        # y1 = self.attention(in_features)
+        # y2 = in_features + y1
+        # y3 = self.ffn(y2)
+        # y4 = y2 + y3
+        
+        # 20251002 Implement post-norm and train
+        # y1 = self.attention(in_features)
+        # y2 = self.ln1(in_features + y1)
+        # y3 = self.ffn(y2)
+        # y4 = self.ln2(y2 + y3)
+
+        # 20251002 add norm
+        # y1 = self.attention(self.ln1(in_features))
+        # y2 = in_features + self.ln2(y1)
+        # y3 = self.ffn(self.ln3(y2))
+        # y4 = y2 + self.ln4(y3)
         return y4
 
 class transformer_lm(nn.Module):
@@ -265,9 +324,15 @@ class transformer_lm(nn.Module):
                  device: torch.device | None=None, 
                  dtype: torch.dtype| None=None):
         super().__init__()
+        logging.info("vocab_size: {} context_length: {} d_model: {} num_layers: {} num_heads: {} d_ff: {} rope_theta: {}".format(vocab_size, context_length, d_model, num_layers, num_heads, d_ff, rope_theta))
+        
         # PA: vocab_size*d_model
         self.embedding = embedding(vocab_size, d_model, device=device, dtype=dtype) 
-        self.transformer_blocks = list()
+        # # 正确方式 - 子模块会被注册
+        # self.module_list = nn.ModuleList([nn.Linear(10, 5), nn.ReLU()])
+        # # 错误方式 - 子模块不会被注册
+        # self.raw_list = [nn.Linear(10, 5), nn.ReLU()]  # 这些层不会被优化器更新！
+        self.transformer_blocks = nn.ModuleList() #list()
         self.num_layers = num_layers
         # CA:num_layers * (8*seq_len*d_model^2 + 4*d_model*seq_len^2 + 6*seq*d_ff*d_model)
         # PA:num_layers * (4*d_model^2 + 2*d_model + 3*d_model*d_ff)

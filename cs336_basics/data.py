@@ -8,7 +8,8 @@ import numpy.typing as npt
 import numpy as np
 
 class DataLoader:
-    def __init__(self):
+    def __init__(self, random = True):
+        self.random = random
         self.dataset_idx = 0
     
     def get_batch(self, dataset: npt.NDArray, batch_size: int, context_length: int, device: str):
@@ -16,17 +17,26 @@ class DataLoader:
         dataset_size = dataset.shape[0]
         cur_data = np.zeros(batch_size * context_length)
         cur_label = np.zeros(batch_size * context_length)
-
-        for i in range(batch_size):
-            cur_data_indices = np.arange(self.dataset_idx, self.dataset_idx + context_length)
-            cur_data[i*context_length:(i+1)*context_length] = np.take(dataset, cur_data_indices, mode='wrap')
-            cur_label_indices = np.arange(self.dataset_idx + 1, self.dataset_idx + context_length + 1)
-            cur_label[i*context_length:(i+1)*context_length] = np.take(dataset, cur_label_indices, mode='wrap')
-            
-            self.dataset_idx += 1
-            if self.dataset_idx + context_length >= dataset_size:
-                self.dataset_idx = 0
-
+        if self.random:
+            for i in range(batch_size):
+                start_idx = np.random.randint(0, dataset_size - context_length)
+                cur_data_indices = np.arange(start_idx, start_idx + context_length)
+                cur_data[i*context_length:(i+1)*context_length] = np.take(dataset, cur_data_indices, mode='wrap')
+                cur_label_indices = np.arange(start_idx + 1, start_idx + context_length + 1)
+                cur_label[i*context_length:(i+1)*context_length] = np.take(dataset, cur_label_indices, mode='wrap')
+        else:
+            for i in range(batch_size):
+                cur_data_indices = np.arange(self.dataset_idx, self.dataset_idx + context_length)
+                cur_data[i*context_length:(i+1)*context_length] = np.take(dataset, cur_data_indices, mode='wrap')
+                cur_label_indices = np.arange(self.dataset_idx + 1, self.dataset_idx + context_length + 1)
+                cur_label[i*context_length:(i+1)*context_length] = np.take(dataset, cur_label_indices, mode='wrap')
+                
+                self.dataset_idx += 1
+                # self.dataset_idx += context_length
+                if self.dataset_idx + context_length >= dataset_size:
+                    self.dataset_idx = 0
+                    
+        # import pdb;pdb.set_trace()
         return (
             torch.tensor(cur_data.reshape(batch_size, context_length), dtype=torch.int32, device=device),
             torch.tensor(cur_label.reshape(batch_size, context_length), dtype=torch.int32, device=device)

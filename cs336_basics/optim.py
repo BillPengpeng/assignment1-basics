@@ -23,7 +23,7 @@ def cross_entropy_func(pred: torch.Tensor, targets: torch.Tensor, reduction: str
     exp_val = torch.exp(pred - max_val)
     sum_val = torch.sum(exp_val, dim=-1, keepdim=True)
 
-    one_hot = torch.zeros(targets.size(0), num_classes, dtype=torch.float32)
+    one_hot = torch.zeros(targets.size(0), num_classes, dtype=torch.float32, device=pred.device)
     # 确保索引是long类型
     targets_long = targets.long()
     one_hot.scatter_(1, targets_long.unsqueeze(1), 1)
