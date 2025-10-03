@@ -735,6 +735,7 @@ def extract_segments_before_special_tokens(input_str: str, special_tokens: list[
                 new_split_parts.append(parts)
             else:
                 # import pdb;pdb.set_trace()
+                # print("token:", token)
                 parts = parts.split(token)
                 for part in parts:
                     if len(part) > 0:
@@ -833,13 +834,24 @@ class BPETokenizer(Tokenizer):
         # init
         self.vocab = vocab
         self.merges_dict: dict[tuple[int, int], int] = dict()
-        self.special_tokens = special_tokens
+        self.merges_vocab: dict[bytes, bool] = dict()
+        # special_tokens
+        self.special_tokens = list()
+        if special_tokens is not None:
+            self.special_tokens += special_tokens
+            
         vocab_index_dict = {v: k for k, v in vocab.items()}
         for byte1, byte2 in merges:
             find_index_byte1 = vocab_index_dict[byte1]
             find_index_byte2 = vocab_index_dict[byte2]
             find_index_merge = vocab_index_dict[byte1+byte2]
             self.merges_dict[(find_index_byte1, find_index_byte2)] = find_index_merge
+            self.merges_vocab[byte1] = True
+            self.merges_vocab[byte2] = True
+            
+        # for pair, new_index in self.merges_dict.items():
+        #     print(pair, new_index)
+            
 
         # special_tokens
         self.special_tokens_dict = dict()
@@ -848,6 +860,18 @@ class BPETokenizer(Tokenizer):
             for special_token in self.special_tokens:
                 byte_encoded_special_token = special_token.encode("utf-8")
                 self.special_tokens_dict[special_token] = self.vocab_index_dict[byte_encoded_special_token]
+
+        # for k, v in vocab.items():
+        #     if v not in self.merges_vocab.keys():
+        #         try:
+        #             special_token = v.decode("utf-8")
+        #             self.special_tokens.append(special_token)
+        #             self.special_tokens_dict[special_token] = k
+        #             # print(k, v, special_token)
+        #         except:
+        #             continue
+        # print("len(self.special_tokens):", len(self.special_tokens))
+        # import pdb;pdb.set_trace()
 
 
         # encode_iterable
@@ -926,6 +950,8 @@ class BPETokenizer(Tokenizer):
         # indices = list(map(int, string.encode("utf-8")))  # @inspect indices
         # 切割字符串
         split_content_list = extract_segments_before_special_tokens(string, self.special_tokens, filter=False)
+        # print(split_content_list)
+        # import pdb;pdb.set_trace()
         segments = list()
         for split_content in split_content_list:
             if split_content in self.special_tokens_dict.keys() or ("\n" not in split_content): 
@@ -952,43 +978,131 @@ class BPETokenizer(Tokenizer):
                 i += 1
 
         # str => utf-8 => int
+        # segment_indice_dict = dict()
+        # for segment in set(segments):
+        #     if segment in self.special_tokens_dict.keys():
+        #         segment_indice_dict[segment] = [self.special_tokens_dict[segment]]
+        #     else:
+        #         # segment_induce_dict[segment] = list(map(int, segment.encode("utf-8")))
+        #         segment_indice_dict[segment] = list()
+        #         # import pdb;pdb.set_trace()
+        #         for ch in segment.encode("utf-8"):
+        #             # unicode => byte
+        #             cur_bytes = bytes([ch])
+        #             segment_indice_dict[segment].append(self.vocab_index_dict[cur_bytes])
+                
+        # merge
+        # for segment in segment_indice_dict.keys():
+        #     if segment in self.special_tokens_dict.keys():
+        #         continue
+
+        #     indices = segment_indice_dict[segment]
+        #     for pair, new_index in self.merges_dict.items():  # @inspect pair, @inspect new_index
+        #         if len(indices) <= 1:
+        #             break
+        #          # 原地修改
+        #         if pair[0] not in indices or pair[1] not in indices:
+        #             continue
+        #         merge(indices, pair, new_index)
+
+        # result
+        # result_indices = list()
+        # for segment in segments:
+        #     result_indices += segment_indice_dict[segment]
+        # return result_indices
+
+        ## merge step0
+        token_idx = 1
+        token_idx_induce_dict = defaultdict(int)
+        induce_pre = defaultdict(int)
+        induce_next = defaultdict(int)
+        pair_pos = defaultdict(set)
+        segment_start_pos_dict = dict()
+        for segment in set(segments):
+            if segment in self.special_tokens_dict.keys():
+                continue
+            # cur_induce
+            cur_induce = list()
+            for ch in segment.encode("utf-8"):
+                # unicode => byte
+                cur_bytes = bytes([ch])
+                cur_induce.append(self.vocab_index_dict[cur_bytes])
+            # init dict
+            # print("cur_induce:", cur_induce)
+            cur_induce_len = len(cur_induce)
+            if cur_induce_len > 0:
+                segment_start_pos_dict[segment] = token_idx
+            for idx in range(cur_induce_len):
+                token_idx_induce_dict[token_idx] = cur_induce[idx]
+                if idx < cur_induce_len - 1:
+                    cur_pos = token_idx 
+                    cur_pair = (cur_induce[idx], cur_induce[idx+1])
+                    pair_pos[cur_pair].add(cur_pos)
+                
+                induce_pre[token_idx] = 0 if idx == 0 else token_idx - 1
+                induce_next[token_idx] = 0 if idx == cur_induce_len - 1 else token_idx + 1
+                token_idx += 1
+                
+        ## merge step1 
+        for pair, new_index in self.merges_dict.items():
+            pos_lst = list(pair_pos.get(pair, set())) 
+            for cur_pos in sorted(pos_lst):
+                pre_token_idx = induce_pre[cur_pos]
+                next_token_idx = induce_next[cur_pos]
+                next_next_token_idx = induce_next[next_token_idx] if next_token_idx > 0 else 0
+                if next_token_idx is None or \
+                   token_idx_induce_dict[cur_pos] != pair[0] or \
+                   token_idx_induce_dict[next_token_idx] != pair[1]:
+                    continue
+
+                # update new_token_idx
+                new_token_idx = cur_pos
+                token_idx_induce_dict[new_token_idx] = new_index
+                induce_pre[new_token_idx] = 0
+                induce_next[new_token_idx] = 0
+    
+                if pre_token_idx > 0:
+                    cur_old_pair = (token_idx_induce_dict[pre_token_idx], pair[0])
+                    cur_new_pair = (token_idx_induce_dict[pre_token_idx], new_index)
+                    pair_pos[cur_old_pair].remove(pre_token_idx)
+                    pair_pos[cur_new_pair].add(pre_token_idx)
+                    induce_pre[new_token_idx] = pre_token_idx
+                    induce_next[pre_token_idx] = new_token_idx
+    
+                if next_next_token_idx > 0:
+                    cur_old_pair = (pair[1],   token_idx_induce_dict[next_next_token_idx])
+                    cur_new_pair = (new_index, token_idx_induce_dict[next_next_token_idx])
+                    pair_pos[cur_old_pair].remove(next_token_idx)
+                    pair_pos[cur_new_pair].add(new_token_idx)
+                    induce_next[new_token_idx] = next_next_token_idx
+                    induce_pre[next_next_token_idx] = new_token_idx
+
+                # update token_idx_induce_dict
+                token_idx_induce_dict[next_token_idx] = 0
+                induce_pre[next_token_idx] = 0
+                induce_next[next_token_idx] = 0
+    
+        # result
         segment_indice_dict = dict()
         for segment in set(segments):
             if segment in self.special_tokens_dict.keys():
                 segment_indice_dict[segment] = [self.special_tokens_dict[segment]]
-            else:
-                # segment_induce_dict[segment] = list(map(int, segment.encode("utf-8")))
-                segment_indice_dict[segment] = list()
-                # import pdb;pdb.set_trace()
-                for ch in segment.encode("utf-8"):
-                    # unicode => byte
-                    cur_bytes = bytes([ch])
-                    segment_indice_dict[segment].append(self.vocab_index_dict[cur_bytes])
-                
-        # merge
-        for segment in segment_indice_dict.keys():
-            if segment in self.special_tokens_dict.keys():
                 continue
-
-            indices = segment_indice_dict[segment]
-            for pair, new_index in self.merges_dict.items():  # @inspect pair, @inspect new_index
-                if len(indices) <= 1:
-                    break
-                 # 原地修改
-                if pair[0] not in indices or pair[1] not in indices:
-                    continue
-                merge(indices, pair, new_index)
-
-        # result
+            try:
+                cur_induce = list()
+                token_idx = segment_start_pos_dict[segment]
+                while token_idx > 0:
+                    cur_induce.append(token_idx_induce_dict[token_idx])
+                    token_idx = induce_next[token_idx]
+                segment_indice_dict[segment] = cur_induce
+            except:
+                continue
+                
         result_indices = list()
         for segment in segments:
             result_indices += segment_indice_dict[segment]
         return result_indices
-
-        # indices_generator = self._encode_generator(segments)
-        # return list(indices_generator)  # 最终必须返回列表
-
-
+            
     def _encode_generator(self, segments: list[int]):
         """生成器实现，逐步产生 token 索引"""
 
