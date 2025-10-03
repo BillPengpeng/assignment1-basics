@@ -213,9 +213,9 @@ def test_bpe_tokenize_TinyStories_proc():
     sample_len = 0
     encoded_ids_len = 0
     input_path = DATA_PATH / "TinyStoriesV2-GPT4-valid.txt"
-    output_path = DATA_PATH / "TinyStoriesV2-GPT4-valid-encoded.npy"
+    output_path = DATA_PATH / "TinyStoriesV2-GPT4-valid-encoded2.npy"
     # input_path = DATA_PATH / "TinyStoriesV2-GPT4-train.txt"
-    # output_path = DATA_PATH / "TinyStoriesV2-GPT4-train-encoded.npy"
+    # output_path = DATA_PATH / "TinyStoriesV2-GPT4-train-encoded2.npy"
 
     # result_list
     result_list = list()
@@ -231,6 +231,7 @@ def test_bpe_tokenize_TinyStories_proc():
             content = f.read(end - start).decode("utf-8", errors="ignore")
             encoded_ids = tokenizer.encode(content)
             result_list.extend(encoded_ids)
+            # import pdb;pdb.set_trace()
             # break
         end_time = time.time()
         
@@ -241,6 +242,93 @@ def test_bpe_tokenize_TinyStories_proc():
     print("arr:", arr.shape)
     np.save(output_path, arr)
 
+def test_bpe_tokenize_owt_proc():
+    vocab_json = DATA_PATH / "owt-vacab.json"
+    merge = DATA_PATH / "owt-merge.txt"
+    
+    tokenizer = BPETokenizer.from_files(
+        vocab_filepath=vocab_json,
+        merges_filepath=merge,
+        special_tokens=["<|endoftext|>"]
+    )
+    subproc_cnt = 1
+    chunk_per_subproc = 1000 #50000
+
+    # TinyStoriesV2-GPT4-valid.txt
+    sample_len = 0
+    encoded_ids_len = 0
+    # input_path = DATA_PATH / "owt_valid.txt"
+    # output_path = DATA_PATH / "owt_valid-encoded.npy"
+    input_path = DATA_PATH / "owt_train.txt"
+    output_path = DATA_PATH / "owt_train-encoded.npy"
+
+    # result_list
+    result_list = list()
+    with open(input_path, "rb") as f:
+        # 获取分块边界
+        boundaries = find_chunk_boundaries(
+            f, subproc_cnt * chunk_per_subproc, "<|endoftext|>".encode("utf-8")
+        )      
+        # print(len(boundaries), subproc_cnt * chunk_per_subproc)
+        boundaries_len = len(boundaries)
+        start_time = time.time()
+        for idx in tqdm(range(boundaries_len - 1)):
+            start, end = boundaries[idx], boundaries[idx + 1]
+            f.seek(start)
+            content = f.read(end - start).decode("utf-8", errors="ignore")
+            encoded_ids = tokenizer.encode(content)
+            # result_list.extend(encoded_ids)
+            arr = np.array(encoded_ids, dtype=np.uint16)
+            save_path = output_path.with_suffix(f'.{idx}.npy')
+            np.save(save_path, arr)
+            # import pdb;pdb.set_trace()
+            # break
+        end_time = time.time()
+        print("test_bpe_tokenize_owt_proc {} second".format(end_time - start_time))
+
+    # np.save
+    # arr = np.array(result_list, dtype=np.uint16)
+    # print("arr:", arr.shape)
+    # np.save(output_path, arr)
+
+def test_bpe_tokenize_owt_merge_proc():
+    chunk_per_subproc = 1000
+    output_path = DATA_PATH / "owt_train-encoded.npy"
+
+    # 第一步：预先计算最终数组的总长度和数据类型
+    total_length = 0
+    for idx in range(chunk_per_subproc - 1):
+        save_path = output_path.with_suffix(f'.{idx}.npy')
+        cur_arr = np.load(save_path)
+        total_length += len(cur_arr) # 累加所有数组的长度
+        del cur_arr # 立即释放当前数组的内存
+
+    dtype = np.uint16
+    print(f"Final array will be of length: {total_length}")
+
+    # 第二步：创建一个内存映射文件作为输出数组
+    # 这里先创建一个空文件并设置大小，‘w+’模式表示可读写
+    final_arr = np.lib.format.open_memmap(output_path, 
+                                         mode='w+', 
+                                         dtype=dtype, 
+                                         shape=(total_length,))
+
+    # 第三步：增量地将数据写入内存映射文件
+    current_index = 0
+    for idx in tqdm(range(chunk_per_subproc - 1)):
+        save_path = output_path.with_suffix(f'.{idx}.npy')
+        cur_arr = np.load(save_path) # 加载一个小块
+
+        chunk_length = len(cur_arr)
+        # 将当前小块的数据写入最终数组的对应位置
+        final_arr[current_index:current_index + chunk_length] = cur_arr
+        current_index += chunk_length
+
+        del cur_arr # 立即释放当前小块的内存
+
+    # 注意：memmap数组（final_arr）会在被删除或程序结束时自动将数据刷写到磁盘
+    # 你也可以手动刷新： final_arr.flush()
+    print(f"Merge completed. Final array shape: {final_arr.shape}")
 
 if __name__ == "__main__":
     # cProfile.run('test_train_bpe_TinyStories()', 'profile_results')
@@ -251,5 +339,7 @@ if __name__ == "__main__":
     # test_train_bpe_TinyStories()
     # test_train_bpe_owe()
     # test_bpe_tokenize_TinyStories_sample()
-    test_bpe_tokenize_TinyStories_proc() 
+    # test_bpe_tokenize_TinyStories_proc() 
+    # test_bpe_tokenize_owt_proc()
+    test_bpe_tokenize_owt_merge_proc()
 

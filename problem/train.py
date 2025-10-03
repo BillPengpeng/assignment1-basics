@@ -11,7 +11,6 @@ import random
 import math
 import torch
 import torch.nn as nn
-import matplotlib.pyplot as plt
 
 from cs336_basics.module import linear, embedding, rmsnorm, silu, swiglu, rope
 from cs336_basics.module import softmax, softmax_func, scaled_dot_product_attention_func
@@ -24,6 +23,10 @@ from cs336_basics.checkpoint import save_checkpoint, load_checkpoint
 # device
 device_str = ('cuda' if torch.cuda.is_available() else 'cpu')
 device = torch.device(device_str)
+
+# cudnn
+torch.backends.cudnn.benchmark = True 
+torch.backends.cudnn.enabled = True 
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Convert list of images to COCO format JSON')
@@ -61,27 +64,36 @@ def build_optimizer(
     optimizer = AdamW(model.parameters(), lr=lr, weight_decay=weight_decay, betas=betas, eps=eps)
     return optimizer
 
+def get_numpy_shape(path):
+    """安全获取numpy数组的真实形状"""
+    with open(path, 'rb') as f:
+        # 只读取头部信息，不加载全部数据
+        version = np.lib.format.read_magic(f)
+        shape, dtype, _ = np.lib.format.read_array_header_1_0(f)
+    return shape, dtype
+
 def build_dataset(
     path: str,
     dtype: np.dtype,
     expected_shape: tuple | None = None
 ):
     assert os.path.exists(path)
-    file_size = os.path.getsize(path)
-    itemsize = np.dtype(dtype).itemsize
+    # file_size = os.path.getsize(path)
+    # itemsize = np.dtype(dtype).itemsize
     
-    if expected_shape:
-        # 验证文件大小是否匹配预期shape
-        expected_size = np.prod(expected_shape) * itemsize
-        if file_size != expected_size:
-            raise ValueError(f"文件大小不匹配: 预期 {expected_size}, 实际 {file_size}")
-        return np.memmap(path, dtype=dtype, mode='r', shape=expected_shape)
-    else:
-        # 自动计算1D数组的shape
-        if file_size % itemsize != 0:
-            raise ValueError("文件大小不是dtype的整数倍")
-        shape = (file_size // itemsize,)
-        return np.memmap(path, dtype=dtype, mode='r', shape=shape)
+    # if expected_shape:
+    #     # 验证文件大小是否匹配预期shape
+    #     expected_size = np.prod(expected_shape) * itemsize
+    #     if file_size != expected_size:
+    #         raise ValueError(f"文件大小不匹配: 预期 {expected_size}, 实际 {file_size}")
+    #     return np.memmap(path, dtype=dtype, mode='r', shape=expected_shape)
+    # else:
+    #     M = np.load(path)
+    #     # 自动计算1D数组的shape
+    #     shape, _ = get_numpy_shape(path)
+    #     import pdb;pdb.set_trace()
+        # return np.memmap(path, dtype=dtype, mode='r', shape=shape)
+    return np.load(path, mmap_mode='r')
 
 def lr_cosine_schedule(
     optimizer: torch.optim.Optimizer,
@@ -109,9 +121,10 @@ def eval(
     model: nn.Module,
     batchsize: int,
     context_length: int,
-    print_freq: int
+    print_freq: int,
+    eval_iters: int
 ):
-    valid_loader = DataLoader()
+    valid_loader = DataLoader() #random=False)
     dataset_size = valid_dataset.shape[0]
     # num_iters = (dataset_size - context_length + batchsize - 1) // batchsize
     num_iters = calc_num_iters(dataset_size, batchsize, context_length)
@@ -119,7 +132,7 @@ def eval(
     total_tokens = 0
     model.eval()
     with torch.no_grad():
-        for iter in range(1, num_iters + 1):
+        for iter in range(1, eval_iters + 1):
             data, labels = valid_loader.get_batch(valid_dataset, batchsize, context_length, device_str)
             pred = model(data)
             loss = cross_entropy_func(pred, labels, reduction = 'sum')      
@@ -130,9 +143,8 @@ def eval(
             if (iter % print_freq == 0) or (iter == num_iters):
                 average_loss = total_loss / total_tokens
                 perplexity = torch.exp(torch.tensor(average_loss))
-                logging.info("[Eval] iter: {}/{} total_loss: {} total_tokens: {} perplexity: {}".format(iter, num_iters, total_loss, total_tokens, perplexity))
-            if iter >= 10:
-                break
+                logging.info("[Eval] iter: {}/{} average_loss: {} total_tokens: {} perplexity: {}".format(iter, num_iters, average_loss, total_tokens, perplexity))
+
 
 def train(
     train_dataset: np,
@@ -152,6 +164,7 @@ def train(
     print_freq: int,
     save_freq: int,
     eval_freq: int,
+    eval_iters: int,
     work_dir: str
 ):
     train_loader = DataLoader()
@@ -169,12 +182,12 @@ def train(
         if iter % print_freq == 0:
             logging.info("[Train] iter: {}/{} lr: {} loss: {}".format(iter, num_iters, lr, loss))
         if iter % eval_freq == 0:
-            eval(valid_dataset, model, batchsize, context_length, print_freq)
+            eval(valid_dataset, model, batchsize, context_length, print_freq, eval_iters)
             model.train()
-        if iter % eval_freq == 0:
+        if iter % save_freq == 0:
             dst_path = os.path.join(work_dir, "iter_{}.pth".format(iter))
             save_checkpoint(model, optimizer, iter, dst_path)
-        break
+        # break
     
 
 if __name__ == "__main__":
@@ -212,15 +225,21 @@ if __name__ == "__main__":
     )
     logging.info("create model num_layers: {} num_heads: {}".format(cfg['model']['num_layers'], cfg['model']['num_heads']))
 
-    # optimizer
-    optimizer = build_optimizer(model, cfg['scheduler']['max_learning_rate'])
+    # optimizer 
+    optimizer = build_optimizer(model, lr=cfg['scheduler']['max_learning_rate'], weight_decay=cfg['scheduler']['weight_decay'])
     dataset_size = train_dataset.shape[0]
-    num_seq_len_per_epoch = cfg['scheduler']['batchsize'] * cfg['model']['seq_len']
-    # num_iters_per_epoch = (dataset_size + num_seq_len_per_epoch - 1) // num_seq_len_per_epoch
     num_iters_per_epoch = calc_num_iters(dataset_size, cfg['scheduler']['batchsize'], cfg['model']['seq_len'])
-    num_iters = int(cfg['scheduler']['num_epochs'] * num_iters_per_epoch)
-    warmup_iters = int(cfg['scheduler']['warmup_epochs'] * num_iters_per_epoch)
-    cosine_cycle_iters = int(cfg['scheduler']['cosine_cycle_epochs'] * num_iters_per_epoch)
+    assert 'total_tokens' in cfg['scheduler'].keys() or 'num_epochs' in cfg['scheduler'].keys()
+    if 'total_tokens' in cfg['scheduler'].keys():
+        num_tokens_per_iter = cfg['scheduler']['batchsize'] * cfg['model']['seq_len']
+        num_iters = (cfg['scheduler']['total_tokens'] + num_tokens_per_iter - 1) // num_tokens_per_iter
+        logging.info("num_tokens_per_iter: {} total_tokens: {} num_iters: {}".format(num_tokens_per_iter, cfg['scheduler']['total_tokens'], num_iters))
+    elif 'num_epochs' in cfg['scheduler'].keys():
+        num_iters = int(cfg['scheduler']['num_epochs'] * num_iters_per_epoch)
+        logging.info("num_iters_per_epoch: {} num_epochs: {} num_iters: {}".format(num_iters_per_epoch, cfg['scheduler']['num_epochs'], num_iters))
+
+    warmup_iters = cfg['scheduler']['warmup_iters']
+    cosine_cycle_iters = int(cfg['scheduler']['cosine_cycle_iter_ratio'] * num_iters)
     logging.info("create optimizer num_iters: {} warmup_iters: {} cosine_cycle_iters: {}".format(num_iters, warmup_iters, cosine_cycle_iters))
 
     # load_checkpoint
@@ -249,6 +268,7 @@ if __name__ == "__main__":
         cfg['print_freq'],
         cfg['save_freq'],
         cfg['eval_freq'],
+        cfg['eval_iters'],
         cfg['workdir']
     )
     # import pdb;pdb.set_trace()

@@ -11,7 +11,6 @@ import random
 import math
 import torch
 import torch.nn as nn
-import matplotlib.pyplot as plt
 
 from cs336_basics.module import linear, embedding, rmsnorm, silu, swiglu, rope
 from cs336_basics.module import softmax, softmax_func, scaled_dot_product_attention_func
@@ -73,7 +72,7 @@ def decode_from_lm(
     model,  # 您的语言模型
     tokenizer,  # 分词器
     prompt: str,  # 用户提供的提示文本
-    max_new_tokens: int = 50,  # 最大生成词元数
+    max_new_tokens: int = 256,  # 最大生成词元数
     temperature: float = 1.0,  # 温度参数
     top_p: float = None,  # Top-p采样阈值
     eos_token: str = "<|endoftext|>",  # 结束标记
@@ -111,6 +110,7 @@ def decode_from_lm(
             next_token = torch.multinomial(probs, num_samples=1)
             
             # 检查是否生成结束标记
+            # import pdb;pdb.set_trace()
             if next_token.item() in tokenizer.special_tokens_dict.values():
                 break
             
@@ -156,6 +156,7 @@ if __name__ == "__main__":
     tokenizer = get_tokenizer_from_vocab_merges_path(
         vocab_path=cfg['dataset']['vocab_path'],
         merges_path=cfg['dataset']['merges_path'],
+        special_tokens=["<|endoftext|>"]
     )
 
     # load_checkpoint
